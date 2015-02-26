@@ -34,11 +34,6 @@ class CredentialAlreadyExists(exceptions.NeutronException):
                 "for tenant %(tenant_id)s.")
 
 
-class NexusComputeHostNotConfigured(exceptions.NeutronException):
-    """Connection to compute host is not configured."""
-    message = _("Connection to %(host)s is not configured.")
-
-
 class NexusConnectFailed(exceptions.NeutronException):
     """Failed to connect to Nexus switch."""
     message = _("Unable to connect to Nexus %(nexus_host)s. Reason: %(exc)s.")

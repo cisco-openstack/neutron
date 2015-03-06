@@ -39,6 +39,8 @@ from neutron.plugins.ml2.drivers.cisco.nexus import nexus_network_driver
 
 LOG = logging.getLogger(__name__)
 
+HOST_NOT_FOUND = _LW("Host %s not defined in switch configuration section.")
+
 
 class CiscoNexusCfgMonitor(object):
     """Replay config on communication failure between Openstack to Nexus."""
@@ -258,10 +260,10 @@ class CiscoNexusMechanismDriver(api.MechanismDriver):
                         intf_type, port = 'ethernet', port_id
                     host_connections.append((switch_ip, intf_type, port))
 
-        if host_connections:
-            return host_connections
-        else:
-            raise excep.NexusComputeHostNotConfigured(host=host_id)
+        if not host_connections:
+            LOG.warn(HOST_NOT_FOUND % host_id)
+
+        return host_connections
 
     def get_switch_ips(self):
         switch_connections = []
@@ -277,10 +279,10 @@ class CiscoNexusMechanismDriver(api.MechanismDriver):
             if str(attr) == str(host_id):
                 host_nve_connections.append(switch_ip)
 
-        if host_nve_connections:
-            return host_nve_connections
-        else:
-            raise excep.NexusComputeHostNotConfigured(host=host_id)
+        if not host_nve_connections:
+            LOG.warn(HOST_NOT_FOUND % host_id)
+
+        return host_nve_connections
 
     def _configure_nve_db(self, vni, device_id, mcast_group, host_id):
         """Create the nexus NVE database entry.
@@ -773,6 +775,9 @@ class CiscoNexusMechanismDriver(api.MechanismDriver):
                 # Find physical network setting for this host.
                 host_id = context.current.get(portbindings.HOST_ID)
                 host_connections = self._get_switch_info(host_id)
+                if not host_connections:
+                    return
+
                 for switch_ip, attr2, attr3 in host_connections:
                     physnet = self._nexus_switches.get((switch_ip, 'physnet'))
                     if physnet:

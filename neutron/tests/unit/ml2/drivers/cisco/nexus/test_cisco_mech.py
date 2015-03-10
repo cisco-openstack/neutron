@@ -845,16 +845,19 @@ class TestCiscoPortsV2(CiscoML2MechanismTestCase,
                                              c_exc.NexusConfigFailed)
 
     def test_nexus_host_not_configured(self):
-        """Test handling of a NexusComputeHostNotConfigured exception.
+        """Test handling of a host not found in our configuration.
 
-        Test the Cisco NexusComputeHostNotConfigured exception by using
-        a fictitious host name during port creation.
+        If a host is not found in the cisco configuration the driver
+        should silently ignore (unknown host name is logged) and no database
+        or switch configuration is performed.
 
         """
-        with self._create_resources(host_id='fake_host',
-                                    expected_failure=True) as result:
-            self._assertExpectedHTTP(result.status_int,
-                                     c_exc.NexusComputeHostNotConfigured)
+        with self._create_resources(host_id='fake_host') as result:
+            self.assertEqual(result.status_int, wexc.HTTPOk.code)
+            self.assertRaises(c_exc.NexusPortBindingNotFound,
+                              nexus_db_v2.get_nexusport_switch_bindings,
+                              NEXUS_IP_ADDR)
+            assert not self.mock_ncclient.connect.called
 
     def test_nexus_missing_fields(self):
         """Test handling of a NexusMissingRequiredFields exception.

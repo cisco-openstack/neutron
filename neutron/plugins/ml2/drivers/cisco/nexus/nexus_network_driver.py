@@ -85,10 +85,6 @@ class CiscoNexusDriver(object):
                                  as a subset of their exception message
                                  (str(exception)) can be ignored
 
-        :returns None: if config was edited successfully
-                 Exception object: if _edit_config() encountered an exception
-                                   containing one of allowed_exc_strs
-
         :raises: NexusConfigFailed: if _edit_config() encountered an exception
                                     not containing one of allowed_exc_strs
 
@@ -106,7 +102,7 @@ class CiscoNexusDriver(object):
         except Exception as e:
             for exc_str in allowed_exc_strs:
                 if exc_str in unicode(e):
-                    return e
+                    return
             try:
                 if mgr:
                     self.connections.pop(nexus_host, None)
@@ -217,15 +213,17 @@ class CiscoNexusDriver(object):
 
         confstr = snipp.EXEC_GET_INVENTORY_SNIPPET
         response = self._get_config(nexus_host, confstr)
-        LOG.debug("GET call returned Nexus type")
         if response:
             nexus_type = re.findall(
                 "\<[mod:]*desc\>\"*Nexus\s*(\d)\d+\s*[0-9A-Z]+\s*"
                 "Chassis\s*\"*\<\/[mod:]*desc\>",
                 response)
-            return int(nexus_type[0])
-        else:
-            return -1
+            if len(nexus_type) > 0:
+                LOG.debug("GET call returned Nexus type %d",
+                    int(nexus_type[0]))
+                return int(nexus_type[0])
+        LOG.debug("GET call failed to return Nexus type")
+        return -1
 
     def create_vlan(self, nexus_host, vlanid, vlanname, vni):
         """Create a VLAN on a Nexus Switch.
@@ -306,14 +304,10 @@ class CiscoNexusDriver(object):
             interface=interface,
             vlanid=vlanid
         )
-        ret_exc = self._edit_config(nexus_host, target='running',
+        self._edit_config(nexus_host, target='running',
                           config=confstr)
-        if ret_exc:
-            LOG.err("Failed to add switchport trunk vlan %s on int %s %s.",
-                vlanid, intf_type, interface)
-        else:
-            LOG.debug("Successfully added switchport trunk vlan %s on int "
-                "%s %s.", vlanid, intf_type, interface)
+        LOG.debug("Successfully added switchport trunk vlan %s on int "
+            "%s %s.", vlanid, intf_type, interface)
 
     def disable_vlan_on_trunk_int(self, nexus_host, vlanid, intf_type,
                                   interface):

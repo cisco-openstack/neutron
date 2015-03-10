@@ -25,7 +25,7 @@ from neutron.common import constants as n_const
 from neutron.db import api as db_api
 from neutron.extensions import portbindings
 from neutron.openstack.common import excutils
-from neutron.openstack.common.gettextutils import _LW
+from neutron.openstack.common.gettextutils import _LW, _LE, _LI
 from neutron.openstack.common import lockutils
 from neutron.openstack.common import log as logging
 from neutron.plugins.common import constants as p_const
@@ -56,7 +56,7 @@ class CiscoNexusCfgMonitor(object):
     def _configure_nexus_type(self, switch_ip, nexus_type):
         if nexus_type not in (const.NEXUS_3K, const.NEXUS_5K,
             const.NEXUS_7K, const.NEXUS_9K):
-            LOG.error(_("Received invalid Nexus type %(nexus_type)d for switch"
+            LOG.error(_LE("Received invalid Nexus type %(nexus_type)d "
                 "for switch ip %(switch_ip)s"),
                 {'nexus_type': nexus_type, 'switch_ip': switch_ip})
             return
@@ -66,7 +66,7 @@ class CiscoNexusCfgMonitor(object):
 
     def replay_config(self, switch_ip):
         """Sends pending config data in OpenStack to Nexus."""
-        LOG.debug(_("Replaying config for switch ip %(switch_ip)s"),
+        LOG.debug("Replaying config for switch ip %(switch_ip)s",
                   {'switch_ip': switch_ip})
 
         nve_bindings = nxos_db.get_nve_switch_bindings(switch_ip)
@@ -76,7 +76,7 @@ class CiscoNexusCfgMonitor(object):
                 self._driver.create_nve_member(switch_ip,
                     const.NVE_INT_NUM, x.vni, x.mcast_group)
             except Exception as e:
-                LOG.debug(_("Failed to configure nve_member for "
+                LOG.error(_LE("Failed to configure nve_member for "
                     "switch %(switch_ip)s, vni %(vni)s"
                     "Reason:%(reason)s "),
                     {'switch_ip': switch_ip, 'vni': x.vni,
@@ -89,7 +89,7 @@ class CiscoNexusCfgMonitor(object):
         try:
             port_bindings = nxos_db.get_nexusport_switch_bindings(switch_ip)
         except excep.NexusPortBindingNotFound:
-            LOG.debug(_("No port entries found for switch ip "
+            LOG.warn(_LW("No port entries found for switch ip "
                       "%(switch_ip)s during replay."),
                       {'switch_ip': switch_ip})
             return
@@ -108,29 +108,29 @@ class CiscoNexusCfgMonitor(object):
             if retry_count > cfg_retry:
                 continue
             if retry_count == cfg_retry:
-                LOG.debug(_("check_connections() switch "
-                          "%(switch_ip)s retry count %(rcnt)d exceeded "
-                          "configured threshold %(thld)d"),
-                          {'switch_ip': switch_ip, 'state': state,
-                           'rcnt': retry_count,
-                           'thld': cfg_retry})
+                LOG.warn(_LW("check_connections() switch "
+                         "%(switch_ip)s retry count %(rcnt)d exceeded "
+                         "configured threshold %(thld)d"),
+                         {'switch_ip': switch_ip,
+                         'rcnt': retry_count,
+                         'thld': cfg_retry})
                 self._mdriver.incr_switch_retry_count(switch_ip)
                 continue
-            LOG.debug(_("check_connections() switch "
-                      "%(switch_ip)s state %(state)d"),
+            LOG.debug("check_connections() switch "
+                      "%(switch_ip)s state %(state)d",
                       {'switch_ip': switch_ip, 'state': state})
             try:
                 nexus_type = self._driver.get_nexus_type(switch_ip)
             except Exception:
                 if state is True:
-                    LOG.error(_("Lost connection to switch ip %(switch_ip)s"),
-                        {'switch_ip': switch_ip})
+                    LOG.error(_LE("Lost connection to switch ip "
+                        "%(switch_ip)s"), {'switch_ip': switch_ip})
                     self._mdriver.set_switch_ip_and_active_state(
                         switch_ip, False)
             else:
                 if state is False:
                     self._configure_nexus_type(switch_ip, nexus_type)
-                    LOG.debug(_("Re-established connection to switch "
+                    LOG.info(_LI("Re-established connection to switch "
                         "ip %(switch_ip)s"),
                         {'switch_ip': switch_ip})
                     self._mdriver.set_switch_ip_and_active_state(
@@ -154,7 +154,7 @@ class CiscoNexusMechanismDriver(api.MechanismDriver):
 
         # Extract configuration parameters from the configuration file.
         self._nexus_switches = conf.ML2MechCiscoConfig.nexus_dict
-        LOG.debug(_("nexus_switches found = %s"), self._nexus_switches)
+        LOG.debug("nexus_switches found = %s", self._nexus_switches)
         # Save dynamic switch information
         self._switch_state = {}
 
@@ -180,7 +180,7 @@ class CiscoNexusMechanismDriver(api.MechanismDriver):
     def register_switch_as_inactive(self, switch_ip, func_name):
         self.set_switch_ip_and_active_state(switch_ip, False)
         LOG.exception(
-            _("Nexus Driver cisco_nexus failed in %(func_name)s"),
+            _LE("Nexus Driver cisco_nexus failed in %(func_name)s"),
             {'func_name': func_name})
 
     def set_switch_nexus_type(self, switch_ip, type):
@@ -261,7 +261,7 @@ class CiscoNexusMechanismDriver(api.MechanismDriver):
                     host_connections.append((switch_ip, intf_type, port))
 
         if not host_connections:
-            LOG.warn(HOST_NOT_FOUND % host_id)
+            LOG.warn(HOST_NOT_FOUND, host_id)
 
         return host_connections
 
@@ -280,7 +280,7 @@ class CiscoNexusMechanismDriver(api.MechanismDriver):
                 host_nve_connections.append(switch_ip)
 
         if not host_nve_connections:
-            LOG.warn(HOST_NOT_FOUND % host_id)
+            LOG.warn(HOST_NOT_FOUND, host_id)
 
         return host_nve_connections
 
@@ -415,15 +415,15 @@ class CiscoNexusMechanismDriver(api.MechanismDriver):
             auto_create = False
 
         if auto_create and auto_trunk:
-            LOG.debug("Nexus: create & trunk vlan %s"), vlan_name
+            LOG.debug("Nexus: create & trunk vlan %s", vlan_name)
             self.driver.create_and_trunk_vlan(
                 switch_ip, vlan_id, vlan_name, intf_type, nexus_port,
                 vni)
         elif auto_create:
-            LOG.debug("Nexus: create vlan %s"), vlan_name
+            LOG.debug("Nexus: create vlan %s", vlan_name)
             self.driver.create_vlan(switch_ip, vlan_id, vlan_name, vni)
         elif auto_trunk:
-            LOG.debug("Nexus: trunk vlan %s"), vlan_name
+            LOG.debug("Nexus: trunk vlan %s", vlan_name)
             self.driver.enable_vlan_on_trunk_int(switch_ip, vlan_id,
                 intf_type, nexus_port)
 
@@ -514,7 +514,7 @@ class CiscoNexusMechanismDriver(api.MechanismDriver):
             except Exception as e:
                 self.choose_to_reraise_driver_exception(switch_ip,
                     'replay _configure_port_binding')
-                LOG.debug(_("Failed to configure port binding "
+                LOG.error(_LE("Failed to configure port binding "
                     "for switch %(switch_ip)s, vlan %(vlan)s "
                     "vni %(vni)s, port %(port)s, "
                     "reason %(reason)s"),

@@ -20,6 +20,7 @@ Implements a Nexus-OS NETCONF over SSHv2 API Client
 import re
 
 from neutron.openstack.common import excutils
+from neutron.openstack.common.gettextutils import _LW
 from neutron.openstack.common import importutils
 from neutron.openstack.common import log as logging
 from neutron.plugins.ml2.drivers.cisco.nexus import config as conf
@@ -96,7 +97,7 @@ class CiscoNexusDriver(object):
             # resulting in error during exception handling
             mgr = None
             mgr = self.nxos_connect(nexus_host)
-            LOG.debug("NexusDriver config: %s", config)
+            LOG.debug("NexusDriver edit config: %s", config)
             if mgr:
                 mgr.edit_config(target=target, config=config)
         except Exception as e:
@@ -180,8 +181,8 @@ class CiscoNexusDriver(object):
 
         confstr = snipp.EXEC_GET_INTF_SNIPPET % (intf_type, interface)
         response = self._get_config(nexus_host, confstr)
-        LOG.debug("GET call returned interface %s %s config",
-            intf_type, interface)
+        LOG.debug("GET call returned interface %(if_type)s %(interface)s "
+            "config", {'if_type': intf_type, 'interface': interface})
         if response and re.search("switchport trunk allowed vlan", response):
             return True
         return False
@@ -222,7 +223,7 @@ class CiscoNexusDriver(object):
                 LOG.debug("GET call returned Nexus type %d",
                     int(nexus_type[0]))
                 return int(nexus_type[0])
-        LOG.debug("GET call failed to return Nexus type")
+        LOG.warn(_LW("GET call failed to return Nexus type"))
         return -1
 
     def create_vlan(self, nexus_host, vlanid, vlanname, vni):
@@ -238,7 +239,7 @@ class CiscoNexusDriver(object):
 
         confstr = self.create_xml_snippet(snippet)
 
-        LOG.debug(_("NexusDriver: %s"), confstr)
+        LOG.debug("NexusDriver: ")
 
         self._edit_config(nexus_host, target='running', config=confstr,
                           allowed_exc_strs=["VLAN with the same name exists"])
@@ -271,7 +272,6 @@ class CiscoNexusDriver(object):
         """Build the VLAN config string xml snippet to be used."""
         confstr = snippet % (intf_type, interface, vlanid, intf_type)
         confstr = self.create_xml_snippet(confstr)
-        LOG.debug(_("NexusDriver: %s"), confstr)
         return confstr
 
     def enable_vlan_on_trunk_int(self, nexus_host, vlanid, intf_type,
@@ -306,8 +306,10 @@ class CiscoNexusDriver(object):
         )
         self._edit_config(nexus_host, target='running',
                           config=confstr)
-        LOG.debug("Successfully added switchport trunk vlan %s on int "
-            "%s %s.", vlanid, intf_type, interface)
+        LOG.debug("Successfully added switchport trunk vlan %(vlanid)s "
+            "on int %(if_type)s %(interface)s.",
+            {'vlanid': vlanid, 'if_type': intf_type,
+             'interface': interface})
 
     def disable_vlan_on_trunk_int(self, nexus_host, vlanid, intf_type,
                                   interface):
@@ -321,7 +323,7 @@ class CiscoNexusDriver(object):
                               intf_type, nexus_port, vni):
         """Create VLAN and trunk it on the specified ports."""
         self.create_vlan(nexus_host, vlan_id, vlan_name, vni)
-        LOG.debug(_("NexusDriver created VLAN: %s"), vlan_id)
+        LOG.debug("NexusDriver created VLAN: %s", vlan_id)
         if nexus_port:
             self.enable_vlan_on_trunk_int(nexus_host, vlan_id, intf_type,
                                           nexus_port)
@@ -330,14 +332,14 @@ class CiscoNexusDriver(object):
         """Create VLAN vn_segment."""
         confstr = snipp.CMD_VLAN_SVI_SNIPPET % (vlan_id, gateway_ip)
         confstr = self.create_xml_snippet(confstr)
-        LOG.debug("NexusDriver: %s", confstr)
+        LOG.debug("NexusDriver: ")
         self._edit_config(nexus_host, target='running', config=confstr)
 
     def delete_vlan_svi(self, nexus_host, vlan_id):
         """Delete VLAN vn_segment."""
         confstr = snipp.CMD_NO_VLAN_SVI_SNIPPET % vlan_id
         confstr = self.create_xml_snippet(confstr)
-        LOG.debug("NexusDriver: %s", confstr)
+        LOG.debug("NexusDriver: ")
         self._edit_config(nexus_host, target='running', config=confstr)
 
     def enable_vxlan_feature(self, nexus_host, nve_int_num, src_intf):
@@ -350,12 +352,12 @@ class CiscoNexusDriver(object):
         # To get around the N9K failing on the "interface nve" command
         # send the two XML snippets down separately.
         confstr = self.create_xml_snippet(snipp.CMD_FEATURE_VXLAN_SNIPPET)
-        LOG.debug("NexusDriver: %s", confstr)
+        LOG.debug("NexusDriver: ")
         self._edit_config(nexus_host, config=confstr)
 
         confstr = self.create_xml_snippet((snipp.CMD_INT_NVE_SNIPPET %
                                            (nve_int_num, src_intf)))
-        LOG.debug("NexusDriver: %s", confstr)
+        LOG.debug("NexusDriver: ")
         self._edit_config(nexus_host, config=confstr)
 
     def disable_vxlan_feature(self, nexus_host):
@@ -363,19 +365,19 @@ class CiscoNexusDriver(object):
 
         # Removing the "feature" commands also removes the  NVE interface.
         confstr = self.create_xml_snippet(snipp.CMD_NO_FEATURE_VXLAN_SNIPPET)
-        LOG.debug("NexusDriver: %s", confstr)
+        LOG.debug("NexusDriver: ")
         self._edit_config(nexus_host, config=confstr)
 
     def create_nve_member(self, nexus_host, nve_int_num, vni, mcast_group):
         """Add a member configuration to the NVE interface."""
         confstr = self.create_xml_snippet((snipp.CMD_INT_NVE_MEMBER_SNIPPET %
                                            (nve_int_num, vni, mcast_group)))
-        LOG.debug("NexusDriver: %s", confstr)
+        LOG.debug("NexusDriver: ")
         self._edit_config(nexus_host, config=confstr)
 
     def delete_nve_member(self, nexus_host, nve_int_num, vni):
         """Delete a member configuration on the NVE interface."""
         confstr = self.create_xml_snippet((snipp.CMD_INT_NVE_NO_MEMBER_SNIPPET
                                            % (nve_int_num, vni)))
-        LOG.debug("NexusDriver: %s", confstr)
+        LOG.debug("NexusDriver: ")
         self._edit_config(nexus_host, config=confstr)

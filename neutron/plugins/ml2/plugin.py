@@ -734,9 +734,11 @@ class Ml2Plugin(db_base_plugin_v2.NeutronDbPluginV2,
                              filter_by(network_id=subnet['network_id']).
                              with_lockmode('update').all())
                 LOG.debug(_("Ports to auto-deallocate: %s"), allocated)
-                only_auto_del = ipv6_utils.is_slaac_subnet(subnet) or all(
-                    not a.port_id or a.ports.device_owner in db_base_plugin_v2.
-                    AUTO_DELETE_PORT_OWNERS for a in allocated)
+                only_auto_del = (
+                    ipv6_utils.is_auto_address_subnet(subnet) or
+                    all(not a.port_id or
+                        a.ports.device_owner in db_base_plugin_v2.
+                        AUTO_DELETE_PORT_OWNERS for a in allocated))
                 if not only_auto_del:
                     LOG.debug(_("Tenant-owned ports exist"))
                     raise exc.SubnetInUse(subnet_id=id)
@@ -1017,8 +1019,6 @@ class Ml2Plugin(db_base_plugin_v2.NeutronDbPluginV2,
                                session.begin(subtransactions=True)):
             port_db, binding = db.get_locked_port_and_binding(session, id)
             if not port_db:
-                # the port existed when l3plugin.prevent_l3_port_deletion
-                # was called but now is already gone
                 LOG.debug(_("The port '%s' was deleted"), id)
                 return
             port = self._make_port_dict(port_db)

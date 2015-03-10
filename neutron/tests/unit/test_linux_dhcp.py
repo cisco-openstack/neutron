@@ -780,7 +780,8 @@ class TestDnsmasq(TestBase):
             '--dhcp-hostsfile=/dhcp/%s/host' % network.id,
             '--addn-hosts=/dhcp/%s/addn_hosts' % network.id,
             '--dhcp-optsfile=/dhcp/%s/opts' % network.id,
-            '--leasefile-ro']
+            '--leasefile-ro',
+            '--dhcp-authoritative']
 
         seconds = ''
         if lease_duration == -1:
@@ -789,14 +790,21 @@ class TestDnsmasq(TestBase):
             seconds = 's'
         if has_static:
             prefix = '--dhcp-range=set:tag%d,%s,static,%s%s'
+            prefix6 = '--dhcp-range=set:tag%d,%s,static,%s,%s%s'
         else:
             prefix = '--dhcp-range=set:tag%d,%s,%s%s'
+            prefix6 = '--dhcp-range=set:tag%d,%s,%s,%s%s'
         possible_leases = 0
         for i, s in enumerate(network.subnets):
             if (s.ip_version != 6
                 or s.ipv6_address_mode == constants.DHCPV6_STATEFUL):
-                expected.extend([prefix % (
-                    i, s.cidr.split('/')[0], lease_duration, seconds)])
+                if s.ip_version == 4:
+                    expected.extend([prefix % (
+                        i, s.cidr.split('/')[0], lease_duration, seconds)])
+                else:
+                    expected.extend([prefix6 % (
+                        i, s.cidr.split('/')[0], s.cidr.split('/')[1],
+                        lease_duration, seconds)])
                 possible_leases += netaddr.IPNetwork(s.cidr).size
 
         expected.append('--dhcp-lease-max=%d' % min(
@@ -1376,6 +1384,18 @@ tag:tag0,option:router""".lstrip()
     def test_check_version_failed_cmd_execution(self):
         with testtools.ExpectedException(SystemExit):
             self._check_version('Error while executing command', 0)
+
+    def test_check_version_ipv6_succeed(self):
+        with mock.patch('neutron.agent.linux.dhcp.LOG.warning') as warning:
+            self._check_version('Dnsmasq version 2.69 Copyright (c)...',
+                                float(2.69))
+            self.assertFalse(warning.called)
+
+    def test_check_version_ipv6_fail(self):
+        with mock.patch('neutron.agent.linux.dhcp.LOG.warning') as warning:
+            self._check_version('Dnsmasq version 2.66 Copyright (c)...',
+                                float(2.66))
+            self.assertTrue(warning.called)
 
     def test_only_populates_dhcp_enabled_subnets(self):
         exp_host_name = '/dhcp/eeeeeeee-eeee-eeee-eeee-eeeeeeeeeeee/host'

@@ -315,6 +315,7 @@ class Dnsmasq(DhcpLocalProcess):
     NEUTRON_NETWORK_ID_KEY = 'NEUTRON_NETWORK_ID'
     NEUTRON_RELAY_SOCKET_PATH_KEY = 'NEUTRON_RELAY_SOCKET_PATH'
     MINIMUM_VERSION = 2.63
+    MINIMUM_IPV6_VERSION = 2.67
 
     @classmethod
     def check_version(cls):
@@ -330,6 +331,13 @@ class Dnsmasq(DhcpLocalProcess):
                             'Please ensure that its version is %s '
                             'or above!'), cls.MINIMUM_VERSION)
                 raise SystemExit(1)
+            is_valid_version = float(ver) >= cls.MINIMUM_IPV6_VERSION
+            if not is_valid_version:
+                LOG.warning(_('FAILED VERSION REQUIREMENT FOR DNSMASQ. '
+                              'DHCP AGENT MAY NOT RUN CORRECTLY WHEN '
+                              'SERVING IPV6 STATEFUL SUBNETS! '
+                              'Please ensure that its version is %s '
+                              'or above!'), cls.MINIMUM_IPV6_VERSION)
         except (OSError, RuntimeError, IndexError, ValueError):
             LOG.error(_('Unable to determine dnsmasq version. '
                         'Please ensure that its version is %s '
@@ -368,6 +376,7 @@ class Dnsmasq(DhcpLocalProcess):
             '--addn-hosts=%s' % self._output_addn_hosts_file(),
             '--dhcp-optsfile=%s' % self._output_opts_file(),
             '--leasefile-ro',
+            '--dhcp-authoritative',
         ]
 
         possible_leases = 0
@@ -397,9 +406,15 @@ class Dnsmasq(DhcpLocalProcess):
 
             # mode is optional and is not set - skip it
             if mode:
-                cmd.append('--dhcp-range=%s%s,%s,%s,%s' %
-                           ('set:', self._TAG_PREFIX % i,
-                            cidr.network, mode, lease))
+                if subnet.ip_version == 4:
+                    cmd.append('--dhcp-range=%s%s,%s,%s,%s' %
+                               ('set:', self._TAG_PREFIX % i,
+                                cidr.network, mode, lease))
+                else:
+                    cmd.append('--dhcp-range=%s%s,%s,%s,%d,%s' %
+                               ('set:', self._TAG_PREFIX % i,
+                                cidr.network, mode,
+                                cidr.prefixlen, lease))
                 possible_leases += cidr.size
 
         # Cap the limit because creating lots of subnets can inflate

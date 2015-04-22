@@ -12,7 +12,7 @@
 #    License for the specific language governing permissions and limitations
 #    under the License.
 
-from oslo.config import cfg
+from oslo_config import cfg
 
 from neutron.agent.common import config
 
@@ -32,7 +32,7 @@ vlan_opts = [
 ]
 
 vxlan_opts = [
-    cfg.BoolOpt('enable_vxlan', default=False,
+    cfg.BoolOpt('enable_vxlan', default=True,
                 help=_("Enable VXLAN on the agent. Can be enabled when "
                        "agent is managed by ml2 plugin using linuxbridge "
                        "mechanism driver")),
@@ -42,8 +42,8 @@ vxlan_opts = [
                help=_("TOS for vxlan interface protocol packets.")),
     cfg.StrOpt('vxlan_group', default=DEFAULT_VXLAN_GROUP,
                help=_("Multicast group for vxlan interface.")),
-    cfg.StrOpt('local_ip', default='',
-               help=_("Local IP address of the VXLAN endpoints.")),
+    cfg.IPOpt('local_ip', version=4,
+              help=_("Local IP address of the VXLAN endpoints.")),
     cfg.BoolOpt('l2_population', default=False,
                 help=_("Extension to use alongside ml2 plugin's l2population "
                        "mechanism driver. It enables the plugin to populate "
@@ -70,4 +70,3 @@ cfg.CONF.register_opts(vxlan_opts, "VXLAN")
 cfg.CONF.register_opts(bridge_opts, "LINUX_BRIDGE")
 cfg.CONF.register_opts(agent_opts, "AGENT")
 config.register_agent_state_opts_helper(cfg.CONF)
-config.register_root_helper(cfg.CONF)

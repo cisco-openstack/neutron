@@ -13,10 +13,13 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import glob
 import os
 import re
 
-from neutron.openstack.common import log as logging
+from oslo_log import log as logging
+
+from neutron.i18n import _LE, _LW
 from neutron.plugins.sriovnicagent.common import exceptions as exc
 from neutron.plugins.sriovnicagent import pci_lib
 
@@ -28,8 +31,9 @@ class PciOsWrapper(object):
 
     DEVICE_PATH = "/sys/class/net/%s/device"
     PCI_PATH = "/sys/class/net/%s/device/virtfn%s/net"
-    VIRTFN_FORMAT = "^virtfn(?P<vf_index>\d+)"
+    VIRTFN_FORMAT = r"^virtfn(?P<vf_index>\d+)"
     VIRTFN_REG_EX = re.compile(VIRTFN_FORMAT)
+    MAC_VTAP_PREFIX = "upper_macvtap*"
 
     @classmethod
     def scan_vf_devices(cls, dev_name):
@@ -41,7 +45,7 @@ class PciOsWrapper(object):
         vf_list = []
         dev_path = cls.DEVICE_PATH % dev_name
         if not os.path.isdir(dev_path):
-            LOG.error(_("Failed to get devices for %s"), dev_name)
+            LOG.error(_LE("Failed to get devices for %s"), dev_name)
             raise exc.InvalidDeviceError(dev_name=dev_name,
                                          reason=_("Device not found"))
         file_list = os.listdir(dev_path)
@@ -65,12 +69,18 @@ class PciOsWrapper(object):
         """Check if VF is assigned.
 
         Checks if a given vf index of a given device name is assigned
-        by checking the relevant path in the system
+        by checking the relevant path in the system:
+        VF is assigned if:
+            Direct VF: PCI_PATH does not exist.
+            Macvtap VF: upper_macvtap path exists.
         @param dev_name: pf network device name
         @param vf_index: vf index
         """
         path = cls.PCI_PATH % (dev_name, vf_index)
-        return not (os.path.isdir(path))
+        if not os.path.isdir(path):
+            return True
+        upper_macvtap_path = os.path.join(path, "*", cls.MAC_VTAP_PREFIX)
+        return bool(glob.glob(upper_macvtap_path))
 
 
 class EmbSwitch(object):
@@ -84,19 +94,17 @@ class EmbSwitch(object):
     @ivar pci_dev_wrapper: pci device wrapper
     """
 
-    def __init__(self, phys_net, dev_name, exclude_devices, root_helper):
+    def __init__(self, phys_net, dev_name, exclude_devices):
         """Constructor
 
         @param phys_net: physical network
         @param dev_name: network device name
         @param exclude_devices: list of pci slots to exclude
-        @param root_helper: root permissions helper
         """
         self.phys_net = phys_net
         self.dev_name = dev_name
         self.pci_slot_map = {}
-        self.pci_dev_wrapper = pci_lib.PciDeviceIPWrapper(dev_name,
-                                                          root_helper)
+        self.pci_dev_wrapper = pci_lib.PciDeviceIPWrapper(dev_name)
 
         self._load_devices(exclude_devices)
 
@@ -136,7 +144,7 @@ class EmbSwitch(object):
         """
         vf_index = self.pci_slot_map.get(pci_slot)
         if vf_index is None:
-            LOG.warning(_("Cannot find vf index for pci slot %s"),
+            LOG.warning(_LW("Cannot find vf index for pci slot %s"),
                         pci_slot)
             raise exc.InvalidPciSlotError(pci_slot=pci_slot)
         return self.pci_dev_wrapper.get_vf_state(vf_index)
@@ -149,7 +157,7 @@ class EmbSwitch(object):
         """
         vf_index = self.pci_slot_map.get(pci_slot)
         if vf_index is None:
-            LOG.warning(_("Cannot find vf index for pci slot %s"),
+            LOG.warning(_LW("Cannot find vf index for pci slot %s"),
                         pci_slot)
             raise exc.InvalidPciSlotError(pci_slot=pci_slot)
         return self.pci_dev_wrapper.set_vf_state(vf_index, state)
@@ -173,7 +181,7 @@ class EmbSwitch(object):
 class ESwitchManager(object):
     """Manages logical Embedded Switch entities for physical network."""
 
-    def __init__(self, device_mappings, exclude_devices, root_helper):
+    def __init__(self, device_mappings, exclude_devices):
         """Constructor.
 
         Create Embedded Switch logical entities for all given device mappings,
@@ -181,7 +189,6 @@ class ESwitchManager(object):
         """
         self.emb_switches_map = {}
         self.pci_slot_map = {}
-        self.root_helper = root_helper
 
         self._discover_devices(device_mappings, exclude_devices)
 
@@ -257,8 +264,7 @@ class ESwitchManager(object):
                                     exclude_devices.get(dev_name, set()))
 
     def _create_emb_switch(self, phys_net, dev_name, exclude_devices):
-        embedded_switch = EmbSwitch(phys_net, dev_name, exclude_devices,
-                                    self.root_helper)
+        embedded_switch = EmbSwitch(phys_net, dev_name, exclude_devices)
         self.emb_switches_map[phys_net] = embedded_switch
         for pci_slot in embedded_switch.get_pci_slot_list():
             self.pci_slot_map[pci_slot] = embedded_switch
@@ -274,8 +280,8 @@ class ESwitchManager(object):
         if embedded_switch:
             used_device_mac = embedded_switch.get_pci_device(pci_slot)
             if used_device_mac != device_mac:
-                LOG.warning(_("device pci mismatch: %(device_mac)s "
-                              "- %(pci_slot)s"), {"device_mac": device_mac,
-                                                  "pci_slot": pci_slot})
+                LOG.warning(_LW("device pci mismatch: %(device_mac)s "
+                                "- %(pci_slot)s"),
+                            {"device_mac": device_mac, "pci_slot": pci_slot})
                 embedded_switch = None
         return embedded_switch

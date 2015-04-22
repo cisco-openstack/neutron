@@ -13,18 +13,18 @@
 #    License for the specific language governing permissions and limitations
 #    under the License.
 
-from oslo.config import cfg
-from oslo.utils import importutils
+from oslo_config import cfg
+from oslo_log import log as logging
+from oslo_utils import importutils
 
-from neutron.agent.common import config
 from neutron.agent.linux import ip_lib
+from neutron.common import exceptions as nexception
 from neutron.common import topics
 from neutron import context
-from neutron.extensions import firewall as fw_ext
 from neutron.i18n import _LE
-from neutron.openstack.common import log as logging
 from neutron.plugins.common import constants
 from neutron.services.firewall.agents import firewall_agent_api as api
+from neutron.services import provider_configuration as provconf
 
 LOG = logging.getLogger(__name__)
 
@@ -55,7 +55,8 @@ class FWaaSL3AgentRpcCallback(api.FWaaSAgentRpcCallbackMixin):
     def __init__(self, conf):
         LOG.debug("Initializing firewall agent")
         self.conf = conf
-        fwaas_driver_class_path = cfg.CONF.fwaas.driver
+        fwaas_driver_class_path = provconf.get_provider_driver_class(
+            cfg.CONF.fwaas.driver)
         self.fwaas_enabled = cfg.CONF.fwaas.enabled
 
         # None means l3-agent has no information on the server
@@ -79,7 +80,6 @@ class FWaaSL3AgentRpcCallback(api.FWaaSAgentRpcCallbackMixin):
                 msg = _('Error importing FWaaS device driver: %s')
                 raise ImportError(msg % fwaas_driver_class_path)
         self.services_sync = False
-        self.root_helper = config.get_root_helper(conf)
         # setup RPC to msg fwaas plugin
         self.fwplugin_rpc = FWaaSL3PluginApi(topics.FIREWALL_PLUGIN,
                                              conf.host)
@@ -87,14 +87,14 @@ class FWaaSL3AgentRpcCallback(api.FWaaSAgentRpcCallbackMixin):
 
     def _get_router_info_list_for_tenant(self, routers, tenant_id):
         """Returns the list of router info objects on which to apply the fw."""
-        root_ip = ip_lib.IPWrapper(self.root_helper)
+        root_ip = ip_lib.IPWrapper()
         # Get the routers for the tenant
         router_ids = [
             router['id']
             for router in routers
             if router['tenant_id'] == tenant_id]
-        local_ns_list = root_ip.get_namespaces(
-            self.root_helper) if self.conf.use_namespaces else []
+        local_ns_list = (root_ip.get_namespaces()
+                         if self.conf.use_namespaces else [])
 
         router_info_list = []
         # Pick up namespaces for Tenant Routers
@@ -140,7 +140,7 @@ class FWaaSL3AgentRpcCallback(api.FWaaSAgentRpcCallbackMixin):
                     status = constants.ACTIVE
                 else:
                     status = constants.DOWN
-            except fw_ext.FirewallInternalDriverError:
+            except nexception.FirewallInternalDriverError:
                 LOG.error(_LE("Firewall Driver Error for %(func_name)s "
                               "for fw: %(fwid)s"),
                           {'func_name': func_name, 'fwid': fw['id']})
@@ -175,7 +175,7 @@ class FWaaSL3AgentRpcCallback(api.FWaaSAgentRpcCallbackMixin):
                 self.fwplugin_rpc.firewall_deleted(
                     ctx,
                     fw['id'])
-            except fw_ext.FirewallInternalDriverError:
+            except nexception.FirewallInternalDriverError:
                 LOG.error(_LE("Firewall Driver Error on fw state %(fwmsg)s "
                               "for fw: %(fwid)s"),
                           {'fwmsg': fw['status'], 'fwid': fw['id']})
@@ -194,7 +194,7 @@ class FWaaSL3AgentRpcCallback(api.FWaaSAgentRpcCallbackMixin):
                     status = constants.ACTIVE
                 else:
                     status = constants.DOWN
-            except fw_ext.FirewallInternalDriverError:
+            except nexception.FirewallInternalDriverError:
                 LOG.error(_LE("Firewall Driver Error on fw state %(fwmsg)s "
                               "for fw: %(fwid)s"),
                           {'fwmsg': fw['status'], 'fwid': fw['id']})

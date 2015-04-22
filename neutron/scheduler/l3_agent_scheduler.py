@@ -17,8 +17,9 @@ import abc
 import itertools
 import random
 
-from oslo.config import cfg
-from oslo.db import exception as db_exc
+from oslo_config import cfg
+from oslo_db import exception as db_exc
+from oslo_log import log as logging
 import six
 from sqlalchemy import sql
 
@@ -28,7 +29,6 @@ from neutron.db import l3_agentschedulers_db
 from neutron.db import l3_db
 from neutron.db import l3_hamode_db
 from neutron.i18n import _LE, _LW
-from neutron.openstack.common import log as logging
 
 
 LOG = logging.getLogger(__name__)
@@ -65,7 +65,7 @@ class L3Scheduler(object):
         unscheduled_routers = []
         for router in routers:
             l3_agents = plugin.get_l3_agents_hosting_routers(
-                context, [router['id']], admin_state_up=True)
+                context, [router['id']])
             if l3_agents:
                 LOG.debug('Router %(router_id)s has already been '
                           'hosted by L3 agent %(agent_id)s',
@@ -241,12 +241,14 @@ class L3Scheduler(object):
             if not snat_bindings and router_gw_exists:
                 # If GW exists for DVR routers and no SNAT binding
                 # call the schedule_snat_router
-                plugin.schedule_snat_router(context, router_id, sync_router)
+                return plugin.schedule_snat_router(
+                    context, router_id, sync_router)
             if not router_gw_exists and snat_bindings:
                 # If DVR router and no Gateway but SNAT Binding exists then
                 # call the unbind_snat_servicenode to unbind the snat service
                 # from agent
                 plugin.unbind_snat_servicenode(context, router_id)
+                return
         candidates = candidates or self.get_candidates(
             plugin, context, sync_router)
         if not candidates:

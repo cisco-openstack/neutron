@@ -12,39 +12,39 @@
 #    License for the specific language governing permissions and limitations
 #    under the License.
 
-import eventlet
-from oslo.config import cfg
+import os
+
+from oslo_config import cfg
 from six import moves
 
 from neutron.agent.linux import external_process
+from neutron.agent.linux import utils
+from neutron.tests import base
 from neutron.tests.functional.agent.linux import simple_daemon
-from neutron.tests.functional import base
 
 
 UUID_FORMAT = "test-uuid-%d"
+SERVICE_NAME = "service"
 
 
-class BaseTestProcessMonitor(base.BaseSudoTestCase):
+class BaseTestProcessMonitor(base.BaseTestCase):
 
     def setUp(self):
         super(BaseTestProcessMonitor, self).setUp()
-        self._exit_handler_called = False
-        cfg.CONF.set_override('check_child_processes_interval', 1)
+        cfg.CONF.set_override('check_child_processes_interval', 1, 'AGENT')
         self._child_processes = []
-        self._ext_processes = None
+        self._process_monitor = None
+        self.create_child_processes_manager('respawn')
         self.addCleanup(self.cleanup_spawned_children)
 
     def create_child_processes_manager(self, action):
-        cfg.CONF.set_override('check_child_processes_action', action)
-        self._ext_processes = external_process.ProcessMonitor(
-            config=cfg.CONF,
-            root_helper=None,
-            resource_type='test',
-            exit_handler=self._exit_handler)
+        cfg.CONF.set_override('check_child_processes_action', action, 'AGENT')
+        self._process_monitor = self.build_process_monitor()
 
-    def _exit_handler(self, uuid, service):
-        self._exit_handler_called = True
-        self._exit_handler_params = (uuid, service)
+    def build_process_monitor(self):
+        return external_process.ProcessMonitor(
+            config=cfg.CONF,
+            resource_type='test')
 
     def _make_cmdline_callback(self, uuid):
         def _cmdline_callback(pidfile):
@@ -54,16 +54,19 @@ class BaseTestProcessMonitor(base.BaseSudoTestCase):
             return cmdline
         return _cmdline_callback
 
-    def _spawn_n_children(self, n, service=None):
+    def spawn_n_children(self, n, service=None):
         self._child_processes = []
         for child_number in moves.xrange(n):
             uuid = self._child_uuid(child_number)
             _callback = self._make_cmdline_callback(uuid)
-            self._ext_processes.enable(uuid=uuid,
-                                       cmd_callback=_callback,
-                                       service=service)
+            pm = external_process.ProcessManager(
+                conf=cfg.CONF,
+                uuid=uuid,
+                default_cmd_callback=_callback,
+                service=service)
+            pm.enable()
+            self._process_monitor.register(uuid, SERVICE_NAME, pm)
 
-            pm = self._ext_processes.get_process_manager(uuid, service)
             self._child_processes.append(pm)
 
     @staticmethod
@@ -73,34 +76,33 @@ class BaseTestProcessMonitor(base.BaseSudoTestCase):
     def _kill_last_child(self):
         self._child_processes[-1].disable()
 
-    def spawn_child_processes_and_kill_last(self, service=None, number=2):
-        self._spawn_n_children(number, service)
-        self._kill_last_child()
-        self.assertFalse(self._child_processes[-1].active)
-
-    def wait_for_all_childs_respawned(self):
-        def all_childs_active():
+    def wait_for_all_children_respawned(self):
+        def all_children_active():
             return all(pm.active for pm in self._child_processes)
 
-        self._wait_for_condition(all_childs_active)
+        for pm in self._child_processes:
+            directory = os.path.dirname(pm.get_pid_file_name())
+            self.assertEqual(0o755, os.stat(directory).st_mode & 0o777)
 
-    def _wait_for_condition(self, exit_condition, extra_time=5):
         # we need to allow extra_time for the check process to happen
         # and properly execute action over the gone processes under
         # high load conditions
-        max_wait_time = cfg.CONF.check_child_processes_interval + extra_time
-        with self.assert_max_execution_time(max_wait_time):
-            while not exit_condition():
-                eventlet.sleep(0.01)
+        max_wait_time = (
+            cfg.CONF.AGENT.check_child_processes_interval + 5)
+        utils.wait_until_true(
+            all_children_active,
+            timeout=max_wait_time,
+            sleep=0.01,
+            exception=RuntimeError('Not all children respawned.'))
 
     def cleanup_spawned_children(self):
-        if self._ext_processes:
-            self._ext_processes.disable_all()
+        for pm in self._child_processes:
+            pm.disable()
 
 
 class TestProcessMonitor(BaseTestProcessMonitor):
 
     def test_respawn_handler(self):
-        self.create_child_processes_manager('respawn')
-        self.spawn_child_processes_and_kill_last()
-        self.wait_for_all_childs_respawned()
+        self.spawn_n_children(2)
+        self._kill_last_child()
+        self.wait_for_all_children_respawned()

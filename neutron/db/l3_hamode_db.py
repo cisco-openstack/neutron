@@ -14,24 +14,26 @@
 #
 
 import netaddr
-from oslo.config import cfg
-from oslo.db import exception as db_exc
-from oslo.utils import excutils
+from oslo_config import cfg
+from oslo_db import exception as db_exc
+from oslo_log import log as logging
+from oslo_utils import excutils
 import sqlalchemy as sa
 from sqlalchemy import orm
 
 from neutron.api.v2 import attributes
 from neutron.common import constants
+from neutron.common import utils as n_utils
 from neutron.db import agents_db
 from neutron.db import l3_dvr_db
 from neutron.db import model_base
 from neutron.db import models_v2
 from neutron.extensions import l3_ext_ha_mode as l3_ha
-from neutron.i18n import _LI, _LW
-from neutron.openstack.common import log as logging
+from neutron.i18n import _LI
 
 VR_ID_RANGE = set(range(1, 255))
 MAX_ALLOCATION_TRIES = 10
+UNLIMITED_AGENTS_PER_ROUTER = 0
 
 LOG = logging.getLogger(__name__)
 
@@ -131,7 +133,18 @@ class L3_HA_NAT_db_mixin(l3_dvr_db.L3_NAT_with_dvr_db_mixin):
         if ('/' not in self.ha_cidr or net.network != net.ip):
             raise l3_ha.HANetworkCIDRNotValid(cidr=self.ha_cidr)
 
-        if cfg.CONF.min_l3_agents_per_router < constants.MINIMUM_AGENTS_FOR_HA:
+        self._check_num_agents_per_router()
+
+    def _check_num_agents_per_router(self):
+        max_agents = cfg.CONF.max_l3_agents_per_router
+        min_agents = cfg.CONF.min_l3_agents_per_router
+
+        if (max_agents != UNLIMITED_AGENTS_PER_ROUTER
+            and max_agents < min_agents):
+            raise l3_ha.HAMaximumAgentsNumberNotValid(
+                max_agents=max_agents, min_agents=min_agents)
+
+        if min_agents < constants.MINIMUM_AGENTS_FOR_HA:
             raise l3_ha.HAMinimumAgentsNumberNotValid()
 
     def __init__(self):
@@ -249,7 +262,9 @@ class L3_HA_NAT_db_mixin(l3_dvr_db.L3_NAT_with_dvr_db_mixin):
         """
 
         min_agents = cfg.CONF.min_l3_agents_per_router
-        num_agents = len(self.get_l3_agents(context))
+        num_agents = len(self.get_l3_agents(context,
+            filters={'agent_modes': [constants.L3_AGENT_MODE_LEGACY,
+                                     constants.L3_AGENT_MODE_DVR_SNAT]}))
         max_agents = cfg.CONF.max_l3_agents_per_router
         if max_agents:
             if max_agents > num_agents:
@@ -396,20 +411,10 @@ class L3_HA_NAT_db_mixin(l3_dvr_db.L3_NAT_with_dvr_db_mixin):
 
         return router_db
 
-    def update_router_state(self, context, router_id, state, host):
-        with context.session.begin(subtransactions=True):
-            bindings = self.get_ha_router_port_bindings(context, [router_id],
-                                                        host)
-            if bindings:
-                if len(bindings) > 1:
-                    LOG.warn(_LW("The router %(router_id)s is bound multiple "
-                                 "times on the agent %(host)s"),
-                             {'router_id': router_id, 'host': host})
-
-                bindings[0].update({'state': state})
-
     def delete_router(self, context, id):
         router_db = self._get_router(context, id)
+        super(L3_HA_NAT_db_mixin, self).delete_router(context, id)
+
         if router_db.extra_attributes.ha:
             ha_network = self.get_ha_network(context,
                                              router_db.tenant_id)
@@ -418,9 +423,9 @@ class L3_HA_NAT_db_mixin(l3_dvr_db.L3_NAT_with_dvr_db_mixin):
                     context, ha_network, router_db.extra_attributes.ha_vr_id)
                 self._delete_ha_interfaces(context, router_db.id)
 
-        return super(L3_HA_NAT_db_mixin, self).delete_router(context, id)
-
     def get_ha_router_port_bindings(self, context, router_ids, host=None):
+        if not router_ids:
+            return []
         query = context.session.query(L3HARouterAgentPortBinding)
 
         if host:
@@ -431,6 +436,12 @@ class L3_HA_NAT_db_mixin(l3_dvr_db.L3_NAT_with_dvr_db_mixin):
             L3HARouterAgentPortBinding.router_id.in_(router_ids))
 
         return query.all()
+
+    def get_l3_bindings_hosting_router_with_ha_states(
+            self, context, router_id):
+        """Return a list of [(agent, ha_state), ...]."""
+        bindings = self.get_ha_router_port_bindings(context, [router_id])
+        return [(binding.agent, binding.state) for binding in bindings]
 
     def _process_sync_ha_data(self, context, routers, host):
         routers_dict = dict((router['id'], router) for router in routers)
@@ -448,13 +459,38 @@ class L3_HA_NAT_db_mixin(l3_dvr_db.L3_NAT_with_dvr_db_mixin):
         for router in routers_dict.values():
             interface = router.get(constants.HA_INTERFACE_KEY)
             if interface:
-                self._populate_subnet_for_ports(context, [interface])
+                self._populate_subnets_for_ports(context, [interface])
 
         return routers_dict.values()
 
     def get_ha_sync_data_for_host(self, context, host=None, router_ids=None,
                                   active=None):
-        sync_data = super(L3_HA_NAT_db_mixin, self).get_sync_data(context,
-                                                                  router_ids,
-                                                                  active)
+        if n_utils.is_extension_supported(self,
+                                          constants.L3_DISTRIBUTED_EXT_ALIAS):
+            # DVR has to be handled differently
+            agent = self._get_agent_by_type_and_host(context,
+                                                     constants.AGENT_TYPE_L3,
+                                                     host)
+            sync_data = self.get_dvr_sync_data(context, host, agent,
+                                               router_ids, active)
+        else:
+            sync_data = super(L3_HA_NAT_db_mixin, self).get_sync_data(context,
+                                                            router_ids, active)
         return self._process_sync_ha_data(context, sync_data, host)
+
+    @classmethod
+    def _set_router_states(cls, context, bindings, states):
+        for binding in bindings:
+            try:
+                with context.session.begin(subtransactions=True):
+                    binding.state = states[binding.router_id]
+            except (orm.exc.StaleDataError, orm.exc.ObjectDeletedError):
+                # Take concurrently deleted routers in to account
+                pass
+
+    def update_routers_states(self, context, states, host):
+        """Receive dict of router ID to state and update them all."""
+
+        bindings = self.get_ha_router_port_bindings(
+            context, router_ids=states.keys(), host=host)
+        self._set_router_states(context, bindings, states)

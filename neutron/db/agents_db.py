@@ -14,30 +14,50 @@
 #    under the License.
 
 from eventlet import greenthread
-
-from oslo.config import cfg
-from oslo.db import exception as db_exc
-from oslo import messaging
-from oslo.serialization import jsonutils
-from oslo.utils import excutils
-from oslo.utils import timeutils
+from oslo_config import cfg
+from oslo_db import exception as db_exc
+from oslo_log import log as logging
+import oslo_messaging
+from oslo_serialization import jsonutils
+from oslo_utils import timeutils
 import sqlalchemy as sa
 from sqlalchemy.orm import exc
 from sqlalchemy import sql
 
+from neutron.api.v2 import attributes
+from neutron.common import constants
 from neutron.db import model_base
 from neutron.db import models_v2
 from neutron.extensions import agent as ext_agent
 from neutron.i18n import _LW
 from neutron import manager
-from neutron.openstack.common import log as logging
 
 LOG = logging.getLogger(__name__)
-cfg.CONF.register_opt(
+
+AGENT_OPTS = [
     cfg.IntOpt('agent_down_time', default=75,
                help=_("Seconds to regard the agent is down; should be at "
                       "least twice report_interval, to be sure the "
-                      "agent is down for good.")))
+                      "agent is down for good.")),
+    cfg.StrOpt('dhcp_load_type', default='networks',
+               choices=['networks', 'subnets', 'ports'],
+               help=_('Representing the resource type whose load is being '
+                      'reported by the agent. This can be "networks", '
+                      '"subnets" or "ports". '
+                      'When specified (Default is networks), the server will '
+                      'extract particular load sent as part of its agent '
+                      'configuration object from the agent report state, '
+                      'which is the number of resources being consumed, at '
+                      'every report_interval.'
+                      'dhcp_load_type can be used in combination with '
+                      'network_scheduler_driver = '
+                      'neutron.scheduler.dhcp_agent_scheduler.WeightScheduler '
+                      'When the network_scheduler_driver is WeightScheduler, '
+                      'dhcp_load_type can be configured to represent the '
+                      'choice for the resource being balanced. '
+                      'Example: dhcp_load_type=networks')),
+]
+cfg.CONF.register_opts(AGENT_OPTS)
 
 
 class Agent(model_base.BASEV2, models_v2.HasId):
@@ -46,6 +66,7 @@ class Agent(model_base.BASEV2, models_v2.HasId):
     __table_args__ = (
         sa.UniqueConstraint('agent_type', 'host',
                             name='uniq_agents0agent_type0host'),
+        model_base.BASEV2.__table_args__
     )
 
     # L3 agent, DHCP agent, OVS agent, LinuxBridge
@@ -67,6 +88,8 @@ class Agent(model_base.BASEV2, models_v2.HasId):
     description = sa.Column(sa.String(255))
     # configurations: a json dict string, I think 4095 is enough
     configurations = sa.Column(sa.String(4095), nullable=False)
+    # load - number of resources hosted by the agent
+    load = sa.Column(sa.Integer, server_default='0', nullable=False)
 
     @property
     def is_active(self):
@@ -93,7 +116,7 @@ class AgentDbMixin(ext_agent.AgentPluginBase):
             agent = query.one()
         except exc.NoResultFound:
             LOG.debug('No enabled %(agent_type)s agent on host '
-                      '%(host)s' % {'agent_type': agent_type, 'host': host})
+                      '%(host)s', {'agent_type': agent_type, 'host': host})
             return
         if self.is_agent_down(agent.heartbeat_timestamp):
             LOG.warn(_LW('%(agent_type)s agent %(agent_id)s is not active'),
@@ -115,6 +138,16 @@ class AgentDbMixin(ext_agent.AgentPluginBase):
                            'host': agent_db.host})
             conf = {}
         return conf
+
+    def _get_agent_load(self, agent):
+        configs = agent.get('configurations', {})
+        load_type = None
+        load = 0
+        if(agent['agent_type'] == constants.AGENT_TYPE_DHCP):
+            load_type = cfg.CONF.dhcp_load_type
+        if load_type:
+            load = int(configs.get(load_type, 0))
+        return load
 
     def _make_agent_dict(self, agent, fields=None):
         attr = ext_agent.RESOURCE_ATTRIBUTE_MAP.get(
@@ -143,9 +176,15 @@ class AgentDbMixin(ext_agent.AgentPluginBase):
         return query.all()
 
     def get_agents(self, context, filters=None, fields=None):
-        return self._get_collection(context, Agent,
-                                    self._make_agent_dict,
-                                    filters=filters, fields=fields)
+        agents = self._get_collection(context, Agent,
+                                      self._make_agent_dict,
+                                      filters=filters, fields=fields)
+        alive = filters and filters.get('alive', None)
+        if alive:
+            # alive filter will be a list
+            alive = attributes.convert_to_boolean(alive[0])
+            agents = [agent for agent in agents if agent['alive'] == alive]
+        return agents
 
     def _get_agent_by_type_and_host(self, context, agent_type, host):
         query = self._model_query(context, Agent)
@@ -171,6 +210,7 @@ class AgentDbMixin(ext_agent.AgentPluginBase):
 
             configurations_dict = agent.get('configurations', {})
             res['configurations'] = jsonutils.dumps(configurations_dict)
+            res['load'] = self._get_agent_load(agent)
             current_time = timeutils.utcnow()
             try:
                 agent_db = self._get_agent_by_type_and_host(
@@ -196,29 +236,32 @@ class AgentDbMixin(ext_agent.AgentPluginBase):
 
         try:
             return self._create_or_update_agent(context, agent)
-        except db_exc.DBDuplicateEntry as e:
-            with excutils.save_and_reraise_exception() as ctxt:
-                if e.columns == ['agent_type', 'host']:
-                    # It might happen that two or more concurrent transactions
-                    # are trying to insert new rows having the same value of
-                    # (agent_type, host) pair at the same time (if there has
-                    # been no such entry in the table and multiple agent status
-                    # updates are being processed at the moment). In this case
-                    # having a unique constraint on (agent_type, host) columns
-                    # guarantees that only one transaction will succeed and
-                    # insert a new agent entry, others will fail and be rolled
-                    # back. That means we must retry them one more time: no
-                    # INSERTs will be issued, because
-                    # _get_agent_by_type_and_host() will return the existing
-                    # agent entry, which will be updated multiple times
-                    ctxt.reraise = False
-                    return self._create_or_update_agent(context, agent)
+        except db_exc.DBDuplicateEntry:
+            # It might happen that two or more concurrent transactions
+            # are trying to insert new rows having the same value of
+            # (agent_type, host) pair at the same time (if there has
+            # been no such entry in the table and multiple agent status
+            # updates are being processed at the moment). In this case
+            # having a unique constraint on (agent_type, host) columns
+            # guarantees that only one transaction will succeed and
+            # insert a new agent entry, others will fail and be rolled
+            # back. That means we must retry them one more time: no
+            # INSERTs will be issued, because
+            # _get_agent_by_type_and_host() will return the existing
+            # agent entry, which will be updated multiple times
+            return self._create_or_update_agent(context, agent)
 
 
 class AgentExtRpcCallback(object):
-    """Processes the rpc report in plugin implementations."""
+    """Processes the rpc report in plugin implementations.
 
-    target = messaging.Target(version='1.0')
+    This class implements the server side of an rpc interface.  The client side
+    can be found in neutron.agent.rpc.PluginReportStateAPI.  For more
+    information on changing rpc interfaces, see doc/source/devref/rpc_api.rst.
+    """
+
+    target = oslo_messaging.Target(version='1.0',
+                                   namespace=constants.RPC_NAMESPACE_STATE)
     START_TIME = timeutils.utcnow()
 
     def __init__(self, plugin=None):

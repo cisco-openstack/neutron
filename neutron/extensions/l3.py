@@ -15,63 +15,63 @@
 
 import abc
 
-from oslo.config import cfg
+from oslo_config import cfg
 
 from neutron.api import extensions
 from neutron.api.v2 import attributes as attr
 from neutron.api.v2 import resource_helper
-from neutron.common import exceptions as qexception
+from neutron.common import exceptions as nexception
 from neutron.plugins.common import constants
 
 
 # L3 Exceptions
-class RouterNotFound(qexception.NotFound):
+class RouterNotFound(nexception.NotFound):
     message = _("Router %(router_id)s could not be found")
 
 
-class RouterInUse(qexception.InUse):
-    message = _("Router %(router_id)s still has ports")
+class RouterInUse(nexception.InUse):
+    message = _("Router %(router_id)s %(reason)s")
+
+    def __init__(self, **kwargs):
+        if 'reason' not in kwargs:
+            kwargs['reason'] = "still has ports"
+        super(RouterInUse, self).__init__(**kwargs)
 
 
-class RouterInterfaceNotFound(qexception.NotFound):
+class RouterInterfaceNotFound(nexception.NotFound):
     message = _("Router %(router_id)s does not have "
                 "an interface with id %(port_id)s")
 
 
-class RouterInterfaceNotFoundForSubnet(qexception.NotFound):
+class RouterInterfaceNotFoundForSubnet(nexception.NotFound):
     message = _("Router %(router_id)s has no interface "
                 "on subnet %(subnet_id)s")
 
 
-class RouterInterfaceInUseByFloatingIP(qexception.InUse):
+class RouterInterfaceInUseByFloatingIP(nexception.InUse):
     message = _("Router interface for subnet %(subnet_id)s on router "
                 "%(router_id)s cannot be deleted, as it is required "
                 "by one or more floating IPs.")
 
 
-class FloatingIPNotFound(qexception.NotFound):
+class FloatingIPNotFound(nexception.NotFound):
     message = _("Floating IP %(floatingip_id)s could not be found")
 
 
-class ExternalGatewayForFloatingIPNotFound(qexception.NotFound):
+class ExternalGatewayForFloatingIPNotFound(nexception.NotFound):
     message = _("External network %(external_network_id)s is not reachable "
                 "from subnet %(subnet_id)s.  Therefore, cannot associate "
                 "Port %(port_id)s with a Floating IP.")
 
 
-class FloatingIPPortAlreadyAssociated(qexception.InUse):
+class FloatingIPPortAlreadyAssociated(nexception.InUse):
     message = _("Cannot associate floating IP %(floating_ip_address)s "
                 "(%(fip_id)s) with port %(port_id)s "
                 "using fixed IP %(fixed_ip)s, as that fixed IP already "
                 "has a floating IP on external network %(net_id)s.")
 
 
-class L3PortInUse(qexception.InUse):
-    message = _("Port %(port_id)s has owner %(device_owner)s and therefore"
-                " cannot be deleted directly via the port API.")
-
-
-class RouterExternalGatewayInUseByFloatingIp(qexception.InUse):
+class RouterExternalGatewayInUseByFloatingIp(nexception.InUse):
     message = _("Gateway cannot be updated for router %(router_id)s, since a "
                 "gateway to external network %(net_id)s is required by one or "
                 "more floating IPs.")
@@ -86,7 +86,7 @@ RESOURCE_ATTRIBUTE_MAP = {
                'is_visible': True,
                'primary_key': True},
         'name': {'allow_post': True, 'allow_put': True,
-                 'validate': {'type:string': None},
+                 'validate': {'type:string': attr.NAME_MAX_LEN},
                  'is_visible': True, 'default': ''},
         'admin_state_up': {'allow_post': True, 'allow_put': True,
                            'default': True,
@@ -96,7 +96,7 @@ RESOURCE_ATTRIBUTE_MAP = {
                    'is_visible': True},
         'tenant_id': {'allow_post': True, 'allow_put': False,
                       'required_by_policy': True,
-                      'validate': {'type:string': None},
+                      'validate': {'type:string': attr.TENANT_ID_MAX_LEN},
                       'is_visible': True},
         EXTERNAL_GW_INFO: {'allow_post': True, 'allow_put': True,
                            'is_visible': True, 'default': None,
@@ -120,9 +120,10 @@ RESOURCE_ATTRIBUTE_MAP = {
                'validate': {'type:uuid': None},
                'is_visible': True,
                'primary_key': True},
-        'floating_ip_address': {'allow_post': False, 'allow_put': False,
+        'floating_ip_address': {'allow_post': True, 'allow_put': False,
                                 'validate': {'type:ip_address_or_none': None},
-                                'is_visible': True},
+                                'is_visible': True, 'default': None,
+                                'enforce_policy': True},
         'floating_network_id': {'allow_post': True, 'allow_put': False,
                                 'validate': {'type:uuid': None},
                                 'is_visible': True},
@@ -138,7 +139,7 @@ RESOURCE_ATTRIBUTE_MAP = {
                              'is_visible': True, 'default': None},
         'tenant_id': {'allow_post': True, 'allow_put': False,
                       'required_by_policy': True,
-                      'validate': {'type:string': None},
+                      'validate': {'type:string': attr.TENANT_ID_MAX_LEN},
                       'is_visible': True},
         'status': {'allow_post': False, 'allow_put': False,
                    'is_visible': True},

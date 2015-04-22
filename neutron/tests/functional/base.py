@@ -14,26 +14,24 @@
 #    under the License.
 
 import os
-import time
 
+from oslo_config import cfg
+
+from neutron.agent.common import config
+from neutron.agent.linux import utils
 from neutron.tests import base
 
-
 SUDO_CMD = 'sudo -n'
-TIMEOUT = 60
-SLEEP_INTERVAL = 1
 
 
 class BaseSudoTestCase(base.BaseTestCase):
     """
     Base class for tests requiring invocation of commands via a root helper.
 
-    Inheritors of this class should call check_sudo_enabled() in
-    setUp() to ensure that tests requiring sudo are skipped unless
-    OS_SUDO_TESTING is set to '1' or 'True' in the test execution
-    environment.  This is intended to allow developers to run the
-    functional suite (e.g. tox -e functional) without test failures if
-    sudo invocations are not allowed.
+    This class skips (during setUp) its tests unless sudo is enabled, ie:
+    OS_SUDO_TESTING is set to '1' or 'True' in the test execution environment.
+    This is intended to allow developers to run the functional suite (e.g. tox
+    -e functional) without test failures if sudo invocations are not allowed.
 
     Running sudo tests in the upstream gate jobs
     (*-neutron-dsvm-functional) requires the additional step of
@@ -49,17 +47,24 @@ class BaseSudoTestCase(base.BaseTestCase):
 
     def setUp(self):
         super(BaseSudoTestCase, self).setUp()
-        env = os.environ
-        self.sudo_enabled = env.get('OS_SUDO_TESTING') in base.TRUE_STRING
-        self.root_helper = env.get('OS_ROOTWRAP_CMD', SUDO_CMD)
+
+        if not base.bool_from_env('OS_SUDO_TESTING'):
+            self.skipTest('Testing with sudo is not enabled')
+
         self.fail_on_missing_deps = (
-            env.get('OS_FAIL_ON_MISSING_DEPS') in base.TRUE_STRING)
+            base.bool_from_env('OS_FAIL_ON_MISSING_DEPS'))
 
-    def check_sudo_enabled(self):
-        if not self.sudo_enabled:
-            self.skipTest('testing with sudo is not enabled')
+        config.register_root_helper(cfg.CONF)
+        self.config(group='AGENT',
+                    root_helper=os.environ.get('OS_ROOTWRAP_CMD', SUDO_CMD))
+        self.config(group='AGENT',
+                    root_helper_daemon=os.environ.get(
+                        'OS_ROOTWRAP_DAEMON_CMD'))
 
-    def wait_until(self, predicate, *args, **kwargs):
-        with self.assert_max_execution_time(TIMEOUT):
-            while not predicate(*args, **kwargs):
-                time.sleep(SLEEP_INTERVAL)
+    def check_command(self, cmd, error_text, skip_msg, run_as_root=False):
+        try:
+            utils.execute(cmd, run_as_root=run_as_root)
+        except RuntimeError as e:
+            if error_text in str(e) and not self.fail_on_missing_deps:
+                self.skipTest(skip_msg)
+            raise

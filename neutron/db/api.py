@@ -13,10 +13,16 @@
 #    License for the specific language governing permissions and limitations
 #    under the License.
 
-from oslo.config import cfg
-from oslo.db.sqlalchemy import session
+import contextlib
+
+from oslo_config import cfg
+from oslo_db.sqlalchemy import session
+from sqlalchemy import exc
+
 
 _FACADE = None
+
+MAX_RETRIES = 10
 
 
 def _create_facade_lazily():
@@ -39,3 +45,15 @@ def get_session(autocommit=True, expire_on_commit=False):
     facade = _create_facade_lazily()
     return facade.get_session(autocommit=autocommit,
                               expire_on_commit=expire_on_commit)
+
+
+@contextlib.contextmanager
+def autonested_transaction(sess):
+    """This is a convenience method to not bother with 'nested' parameter."""
+    try:
+        session_context = sess.begin_nested()
+    except exc.InvalidRequestError:
+        session_context = sess.begin(subtransactions=True)
+    finally:
+        with session_context as tx:
+            yield tx

@@ -15,10 +15,11 @@
 
 import os
 import socket
+import ssl
 import urllib2
 
 import mock
-from oslo.config import cfg
+from oslo_config import cfg
 import testtools
 import webob
 import webob.exc
@@ -34,8 +35,35 @@ TEST_VAR_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__),
 
 
 def open_no_proxy(*args, **kwargs):
-    opener = urllib2.build_opener(urllib2.ProxyHandler({}))
+    # NOTE(jamespage):
+    # Deal with more secure certification chain verficiation
+    # introduced in python 2.7.9 under PEP-0476
+    # https://github.com/python/peps/blob/master/pep-0476.txt
+    if hasattr(ssl, "_create_unverified_context"):
+        opener = urllib2.build_opener(
+            urllib2.ProxyHandler({}),
+            urllib2.HTTPSHandler(context=ssl._create_unverified_context())
+        )
+    else:
+        opener = urllib2.build_opener(urllib2.ProxyHandler({}))
     return opener.open(*args, **kwargs)
+
+
+class TestWorkerService(base.BaseTestCase):
+    """WorkerService tests."""
+
+    @mock.patch('neutron.db.api')
+    def test_start_withoutdb_call(self, apimock):
+        _service = mock.Mock()
+        _service.pool = mock.Mock()
+        _service.pool.spawn = mock.Mock()
+        _service.pool.spawn.return_value = None
+
+        _app = mock.Mock()
+        cfg.CONF.set_override("connection", "", "database")
+        workerservice = wsgi.WorkerService(_service, _app)
+        workerservice.start()
+        self.assertFalse(apimock.get_engine.called)
 
 
 class TestWSGIServer(base.BaseTestCase):
@@ -127,6 +155,21 @@ class TestWSGIServer(base.BaseTestCase):
 
         server.stop()
 
+    @mock.patch.object(wsgi, 'eventlet')
+    @mock.patch.object(wsgi, 'loggers')
+    def test__run(self, logging_mock, eventlet_mock):
+        server = wsgi.Server('test')
+        server._run("app", "socket")
+        eventlet_mock.wsgi.server.assert_called_once_with(
+            'socket',
+            'app',
+            max_size=server.num_threads,
+            log=mock.ANY,
+            keepalive=CONF.wsgi_keep_alive,
+            socket_timeout=server.client_socket_timeout
+        )
+        self.assertTrue(len(logging_mock.mock_calls))
+
 
 class SerializerTest(base.BaseTestCase):
     def test_serialize_unknown_content_type(self):
@@ -203,9 +246,8 @@ class RequestDeserializerTest(testtools.TestCase):
         request = wsgi.Request.blank('/')
         request.headers['Accept'] = 'application/json'
 
-        self.assertEqual(
-            self.deserializer.get_expected_content_type(request),
-            'application/json')
+        self.assertEqual('application/json',
+                         self.deserializer.get_expected_content_type(request))
 
     def test_get_action_args(self):
         """Test RequestDeserializer.get_action_args."""
@@ -217,8 +259,8 @@ class RequestDeserializerTest(testtools.TestCase):
                 'id': 12}]}
         expected = {'action': 'update', 'id': 12}
 
-        self.assertEqual(
-            self.deserializer.get_action_args(env), expected)
+        self.assertEqual(expected,
+                         self.deserializer.get_action_args(env))
 
     def test_deserialize(self):
         """Test RequestDeserializer.deserialize."""
@@ -274,24 +316,23 @@ class ResponseSerializerTest(testtools.TestCase):
     def test_get_serializer(self):
         """Test ResponseSerializer.get_body_serializer."""
         content_type = 'application/json'
-        self.assertEqual(
-            self.serializer.get_body_serializer(content_type),
-            self.body_serializers[content_type])
+        self.assertEqual(self.body_serializers[content_type],
+                         self.serializer.get_body_serializer(content_type))
 
     def test_serialize_json_response(self):
         response = self.serializer.serialize({}, 'application/json')
 
-        self.assertEqual(response.headers['Content-Type'], 'application/json')
-        self.assertEqual(response.body, 'pew_json')
-        self.assertEqual(response.status_int, 404)
+        self.assertEqual('application/json', response.headers['Content-Type'])
+        self.assertEqual('pew_json', response.body)
+        self.assertEqual(404, response.status_int)
 
     def test_serialize_response_None(self):
         response = self.serializer.serialize(
             None, 'application/json')
 
-        self.assertEqual(response.headers['Content-Type'], 'application/json')
-        self.assertEqual(response.body, '')
-        self.assertEqual(response.status_int, 404)
+        self.assertEqual('application/json', response.headers['Content-Type'])
+        self.assertEqual('', response.body)
+        self.assertEqual(404, response.status_int)
 
 
 class RequestTest(base.BaseTestCase):
@@ -314,7 +355,7 @@ class RequestTest(base.BaseTestCase):
         request.headers["Content-Type"] = "application/json; charset=UTF-8"
         result = request.get_content_type()
 
-        self.assertEqual(result, "application/json")
+        self.assertEqual("application/json", result)
 
     def test_content_type_with_given_content_types(self):
         request = wsgi.Request.blank('/tests/123')
@@ -327,45 +368,45 @@ class RequestTest(base.BaseTestCase):
         request.headers["Accept"] = "application/json"
         result = request.best_match_content_type()
 
-        self.assertEqual(result, "application/json")
+        self.assertEqual("application/json", result)
 
         request = wsgi.Request.blank('/tests/123')
         request.headers["Accept"] = ("application/json; q=0.3")
         result = request.best_match_content_type()
 
-        self.assertEqual(result, "application/json")
+        self.assertEqual("application/json", result)
 
     def test_content_type_from_query_extension(self):
         request = wsgi.Request.blank('/tests/123.json')
         result = request.best_match_content_type()
 
-        self.assertEqual(result, "application/json")
+        self.assertEqual("application/json", result)
 
         request = wsgi.Request.blank('/tests/123.invalid')
         result = request.best_match_content_type()
 
-        self.assertEqual(result, "application/json")
+        self.assertEqual("application/json", result)
 
     def test_content_type_accept_and_query_extension(self):
         request = wsgi.Request.blank('/tests/123.json')
         request.headers["Accept"] = "application/json"
         result = request.best_match_content_type()
 
-        self.assertEqual(result, "application/json")
+        self.assertEqual("application/json", result)
 
     def test_content_type_accept_default(self):
         request = wsgi.Request.blank('/tests/123.unsupported')
         request.headers["Accept"] = "application/unsupported1"
         result = request.best_match_content_type()
 
-        self.assertEqual(result, "application/json")
+        self.assertEqual("application/json", result)
 
     def test_content_type_accept_with_given_content_types(self):
         request = wsgi.Request.blank('/tests/123')
         request.headers["Accept"] = "application/new_type"
         result = request.best_match_content_type()
 
-        self.assertEqual(result, 'application/json')
+        self.assertEqual("application/json", result)
 
 
 class ActionDispatcherTest(base.BaseTestCase):
@@ -374,9 +415,8 @@ class ActionDispatcherTest(base.BaseTestCase):
         serializer = wsgi.ActionDispatcher()
         serializer.create = lambda x: x
 
-        self.assertEqual(
-            serializer.dispatch('pants', action='create'),
-            'pants')
+        self.assertEqual('pants',
+                         serializer.dispatch('pants', action='create'))
 
     def test_dispatch_action_None(self):
         """Test ActionDispatcher.dispatch with none action."""
@@ -384,18 +424,16 @@ class ActionDispatcherTest(base.BaseTestCase):
         serializer.create = lambda x: x + ' pants'
         serializer.default = lambda x: x + ' trousers'
 
-        self.assertEqual(
-            serializer.dispatch('Two', action=None),
-            'Two trousers')
+        self.assertEqual('Two trousers',
+                         serializer.dispatch('Two', action=None))
 
     def test_dispatch_default(self):
         serializer = wsgi.ActionDispatcher()
         serializer.create = lambda x: x + ' pants'
         serializer.default = lambda x: x + ' trousers'
 
-        self.assertEqual(
-            serializer.dispatch('Two', action='update'),
-            'Two trousers')
+        self.assertEqual('Two trousers',
+                         serializer.dispatch('Two', action='update'))
 
 
 class ResponseHeadersSerializerTest(base.BaseTestCase):
@@ -404,7 +442,7 @@ class ResponseHeadersSerializerTest(base.BaseTestCase):
         response = webob.Response()
         serializer.serialize(response, {'v': '123'}, 'fake')
 
-        self.assertEqual(response.status_int, 200)
+        self.assertEqual(200, response.status_int)
 
     def test_custom(self):
         class Serializer(wsgi.ResponseHeaderSerializer):
@@ -415,16 +453,16 @@ class ResponseHeadersSerializerTest(base.BaseTestCase):
         response = webob.Response()
         serializer.serialize(response, {'v': '123'}, 'update')
 
-        self.assertEqual(response.status_int, 404)
-        self.assertEqual(response.headers['X-Custom-Header'], '123')
+        self.assertEqual(404, response.status_int)
+        self.assertEqual('123', response.headers['X-Custom-Header'])
 
 
 class DictSerializerTest(base.BaseTestCase):
 
     def test_dispatch_default(self):
         serializer = wsgi.DictSerializer()
-        self.assertEqual(
-            serializer.serialize({}, 'NonExistentAction'), '')
+        self.assertEqual('',
+                         serializer.serialize({}, 'NonExistentAction'))
 
 
 class JSONDictSerializerTest(base.BaseTestCase):
@@ -436,7 +474,7 @@ class JSONDictSerializerTest(base.BaseTestCase):
         result = serializer.serialize(input_dict)
         result = result.replace('\n', '').replace(' ', '')
 
-        self.assertEqual(result, expected_json)
+        self.assertEqual(expected_json, result)
 
     def test_json_with_utf8(self):
         input_dict = dict(servers=dict(a=(2, '\xe7\xbd\x91\xe7\xbb\x9c')))
@@ -445,7 +483,7 @@ class JSONDictSerializerTest(base.BaseTestCase):
         result = serializer.serialize(input_dict)
         result = result.replace('\n', '').replace(' ', '')
 
-        self.assertEqual(result, expected_json)
+        self.assertEqual(expected_json, result)
 
     def test_json_with_unicode(self):
         input_dict = dict(servers=dict(a=(2, u'\u7f51\u7edc')))
@@ -454,15 +492,15 @@ class JSONDictSerializerTest(base.BaseTestCase):
         result = serializer.serialize(input_dict)
         result = result.replace('\n', '').replace(' ', '')
 
-        self.assertEqual(result, expected_json)
+        self.assertEqual(expected_json, result)
 
 
 class TextDeserializerTest(base.BaseTestCase):
 
     def test_dispatch_default(self):
         deserializer = wsgi.TextDeserializer()
-        self.assertEqual(
-            deserializer.deserialize({}, 'update'), {})
+        self.assertEqual({},
+                         deserializer.deserialize({}, 'update'))
 
 
 class JSONDeserializerTest(base.BaseTestCase):
@@ -482,8 +520,8 @@ class JSONDeserializerTest(base.BaseTestCase):
                     'd': {'e': '1'},
                     'f': '1'}}}
         deserializer = wsgi.JSONDeserializer()
-        self.assertEqual(
-            deserializer.deserialize(data), as_dict)
+        self.assertEqual(as_dict,
+                         deserializer.deserialize(data))
 
     def test_default_raise_Malformed_Exception(self):
         """Test JsonDeserializer.default.
@@ -501,15 +539,15 @@ class JSONDeserializerTest(base.BaseTestCase):
         data = '{"a": "\xe7\xbd\x91\xe7\xbb\x9c"}'
         as_dict = {'body': {'a': u'\u7f51\u7edc'}}
         deserializer = wsgi.JSONDeserializer()
-        self.assertEqual(
-            deserializer.deserialize(data), as_dict)
+        self.assertEqual(as_dict,
+                         deserializer.deserialize(data))
 
     def test_json_with_unicode(self):
         data = '{"a": "\u7f51\u7edc"}'
         as_dict = {'body': {'a': u'\u7f51\u7edc'}}
         deserializer = wsgi.JSONDeserializer()
-        self.assertEqual(
-            deserializer.deserialize(data), as_dict)
+        self.assertEqual(as_dict,
+                         deserializer.deserialize(data))
 
 
 class RequestHeadersDeserializerTest(base.BaseTestCase):
@@ -518,8 +556,8 @@ class RequestHeadersDeserializerTest(base.BaseTestCase):
         deserializer = wsgi.RequestHeadersDeserializer()
         req = wsgi.Request.blank('/')
 
-        self.assertEqual(
-            deserializer.deserialize(req, 'nonExistent'), {})
+        self.assertEqual({},
+                         deserializer.deserialize(req, 'nonExistent'))
 
     def test_custom(self):
         class Deserializer(wsgi.RequestHeadersDeserializer):
@@ -528,81 +566,64 @@ class RequestHeadersDeserializerTest(base.BaseTestCase):
         deserializer = Deserializer()
         req = wsgi.Request.blank('/')
         req.headers['X-Custom-Header'] = 'b'
-        self.assertEqual(
-            deserializer.deserialize(req, 'update'), {'a': 'b'})
+        self.assertEqual({'a': 'b'},
+                         deserializer.deserialize(req, 'update'))
 
 
 class ResourceTest(base.BaseTestCase):
-    def test_dispatch(self):
-        class Controller(object):
-            def index(self, request, index=None):
-                return index
 
-        def my_fault_body_function():
+    @staticmethod
+    def my_fault_body_function():
             return 'off'
 
-        resource = wsgi.Resource(Controller(), my_fault_body_function)
+    class Controller(object):
+        def index(self, request, index=None):
+            return index
+
+    def test_dispatch(self):
+        resource = wsgi.Resource(self.Controller(),
+                                 self.my_fault_body_function)
         actual = resource.dispatch(
             resource.controller, 'index', action_args={'index': 'off'})
         expected = 'off'
 
-        self.assertEqual(actual, expected)
+        self.assertEqual(expected, actual)
 
     def test_dispatch_unknown_controller_action(self):
-        class Controller(object):
-            def index(self, request, pants=None):
-                return pants
-
-        def my_fault_body_function():
-            return 'off'
-
-        resource = wsgi.Resource(Controller(), my_fault_body_function)
+        resource = wsgi.Resource(self.Controller(),
+                                 self.my_fault_body_function)
         self.assertRaises(
             AttributeError, resource.dispatch,
             resource.controller, 'create', {})
 
     def test_malformed_request_body_throws_bad_request(self):
-        def my_fault_body_function():
-            return 'off'
-
-        resource = wsgi.Resource(None, my_fault_body_function)
+        resource = wsgi.Resource(None, self.my_fault_body_function)
         request = wsgi.Request.blank(
             "/", body="{mal:formed", method='POST',
             headers={'Content-Type': "application/json"})
 
         response = resource(request)
-        self.assertEqual(response.status_int, 400)
+        self.assertEqual(400, response.status_int)
 
     def test_wrong_content_type_throws_unsupported_media_type_error(self):
-        def my_fault_body_function():
-            return 'off'
-        resource = wsgi.Resource(None, my_fault_body_function)
+        resource = wsgi.Resource(None, self.my_fault_body_function)
         request = wsgi.Request.blank(
             "/", body="{some:json}", method='POST',
             headers={'Content-Type': "xxx"})
 
         response = resource(request)
-        self.assertEqual(response.status_int, 400)
+        self.assertEqual(400, response.status_int)
 
     def test_wrong_content_type_server_error(self):
-        def my_fault_body_function():
-            return 'off'
-        resource = wsgi.Resource(None, my_fault_body_function)
+        resource = wsgi.Resource(None, self.my_fault_body_function)
         request = wsgi.Request.blank(
             "/", method='POST', headers={'Content-Type': "unknow"})
 
         response = resource(request)
-        self.assertEqual(response.status_int, 500)
+        self.assertEqual(500, response.status_int)
 
     def test_call_resource_class_bad_request(self):
-        class Controller(object):
-            def index(self, request, index=None):
-                return index
-
-        def my_fault_body_function():
-            return 'off'
-
-        class FakeRequest():
+        class FakeRequest(object):
             def __init__(self):
                 self.url = 'http://where.no'
                 self.environ = 'environ'
@@ -614,19 +635,15 @@ class ResourceTest(base.BaseTestCase):
             def best_match_content_type(self):
                 return 'best_match_content_type'
 
-        resource = wsgi.Resource(Controller(), my_fault_body_function)
+        resource = wsgi.Resource(self.Controller(),
+                                 self.my_fault_body_function)
         request = FakeRequest()
         result = resource(request)
         self.assertEqual(400, result.status_int)
 
     def test_type_error(self):
-        class Controller(object):
-            def index(self, request, index=None):
-                return index
-
-        def my_fault_body_function():
-            return 'off'
-        resource = wsgi.Resource(Controller(), my_fault_body_function)
+        resource = wsgi.Resource(self.Controller(),
+                                 self.my_fault_body_function)
         request = wsgi.Request.blank(
             "/", method='POST', headers={'Content-Type': "json"})
 
@@ -635,14 +652,7 @@ class ResourceTest(base.BaseTestCase):
         self.assertEqual(400, response.status_int)
 
     def test_call_resource_class_internal_error(self):
-        class Controller(object):
-            def index(self, request, index=None):
-                return index
-
-        def my_fault_body_function():
-            return 'off'
-
-        class FakeRequest():
+        class FakeRequest(object):
             def __init__(self):
                 self.url = 'http://where.no'
                 self.environ = 'environ'
@@ -654,7 +664,8 @@ class ResourceTest(base.BaseTestCase):
             def best_match_content_type(self):
                 return 'application/json'
 
-        resource = wsgi.Resource(Controller(), my_fault_body_function)
+        resource = wsgi.Resource(self.Controller(),
+                                 self.my_fault_body_function)
         request = FakeRequest()
         result = resource(request)
         self.assertEqual(500, result.status_int)

@@ -21,25 +21,25 @@ import time
 import eventlet
 eventlet.monkey_patch()
 
-from oslo import messaging
+from oslo_log import log as logging
+import oslo_messaging
 
-from neutron.agent.linux import ovs_lib
+from neutron.agent.common import ovs_lib
 from neutron.agent import rpc as agent_rpc
 from neutron.agent import securitygroups_rpc as sg_rpc
 from neutron.common import config as common_config
-from neutron.common import rpc as n_rpc
 from neutron.common import topics
 from neutron import context as n_context
 from neutron.extensions import securitygroup as ext_sg
-from neutron.openstack.common import log as logging
+from neutron.i18n import _LE, _LI
 from neutron.plugins.oneconvergence.lib import config
 
 LOG = logging.getLogger(__name__)
 
 
-class NVSDAgentRpcCallback(n_rpc.RpcCallback):
+class NVSDAgentRpcCallback(object):
 
-    RPC_API_VERSION = '1.0'
+    target = oslo_messaging.Target(version='1.0')
 
     def __init__(self, context, agent, sg_agent):
         super(NVSDAgentRpcCallback, self).__init__()
@@ -48,7 +48,7 @@ class NVSDAgentRpcCallback(n_rpc.RpcCallback):
         self.sg_agent = sg_agent
 
     def port_update(self, context, **kwargs):
-        LOG.debug(_("port_update received: %s"), kwargs)
+        LOG.debug("port_update received: %s", kwargs)
         port = kwargs.get('port')
         # Validate that port is on OVS
         vif_port = self.agent.int_br.get_vif_port_by_id(port['id'])
@@ -59,19 +59,9 @@ class NVSDAgentRpcCallback(n_rpc.RpcCallback):
             self.sg_agent.refresh_firewall()
 
 
-class SecurityGroupServerRpcApi(sg_rpc.SecurityGroupServerRpcApiMixin):
+class SecurityGroupAgentRpcCallback(sg_rpc.SecurityGroupAgentRpcCallbackMixin):
 
-    def __init__(self, topic):
-        self.topic = topic
-        target = messaging.Target(topic=topic, version=sg_rpc.SG_RPC_VERSION)
-        self.client = n_rpc.get_client(target)
-
-
-class SecurityGroupAgentRpcCallback(
-    n_rpc.RpcCallback,
-    sg_rpc.SecurityGroupAgentRpcCallbackMixin):
-
-    RPC_API_VERSION = sg_rpc.SG_RPC_VERSION
+    target = oslo_messaging.Target(version=sg_rpc.SG_RPC_VERSION)
 
     def __init__(self, context, sg_agent):
         super(SecurityGroupAgentRpcCallback, self).__init__()
@@ -79,27 +69,16 @@ class SecurityGroupAgentRpcCallback(
         self.sg_agent = sg_agent
 
 
-class SecurityGroupAgentRpc(sg_rpc.SecurityGroupAgentRpcMixin):
-
-    def __init__(self, context, root_helper):
-        self.context = context
-
-        self.plugin_rpc = SecurityGroupServerRpcApi(topics.PLUGIN)
-        self.root_helper = root_helper
-        self.init_firewall()
-
-
-class NVSDNeutronAgent(n_rpc.RpcCallback):
+class NVSDNeutronAgent(object):
     # history
     #   1.0 Initial version
     #   1.1 Support Security Group RPC
-    RPC_API_VERSION = '1.1'
+    target = oslo_messaging.Target(version='1.1')
 
-    def __init__(self, integ_br, root_helper, polling_interval):
+    def __init__(self, integ_br, polling_interval):
         super(NVSDNeutronAgent, self).__init__()
-        self.int_br = ovs_lib.OVSBridge(integ_br, root_helper)
+        self.int_br = ovs_lib.OVSBridge(integ_br)
         self.polling_interval = polling_interval
-        self.root_helper = root_helper
         self.setup_rpc()
         self.ports = set()
 
@@ -107,12 +86,13 @@ class NVSDNeutronAgent(n_rpc.RpcCallback):
 
         self.host = socket.gethostname()
         self.agent_id = 'nvsd-q-agent.%s' % self.host
-        LOG.info(_("RPC agent_id: %s"), self.agent_id)
+        LOG.info(_LI("RPC agent_id: %s"), self.agent_id)
 
         self.topic = topics.AGENT
         self.context = n_context.get_admin_context_without_session()
-        self.sg_agent = SecurityGroupAgentRpc(self.context,
-                                              self.root_helper)
+        self.sg_plugin_rpc = sg_rpc.SecurityGroupServerRpcApi(topics.PLUGIN)
+        self.sg_agent = sg_rpc.SecurityGroupAgentRpc(self.context,
+                                                     self.sg_plugin_rpc)
 
         # RPC network init
         # Handle updates from service
@@ -152,14 +132,14 @@ class NVSDNeutronAgent(n_rpc.RpcCallback):
             try:
                 port_info = self._update_ports(ports)
                 if port_info:
-                    LOG.debug(_("Port list is updated"))
+                    LOG.debug("Port list is updated")
                     self._process_devices_filter(port_info)
                     ports = port_info['current']
                     self.ports = ports
             except Exception:
-                LOG.exception(_("Error in agent event loop"))
+                LOG.exception(_LE("Error in agent event loop"))
 
-            LOG.debug(_("AGENT looping....."))
+            LOG.debug("AGENT looping.....")
             time.sleep(self.polling_interval)
 
 
@@ -168,10 +148,9 @@ def main():
     common_config.setup_logging()
 
     integ_br = config.AGENT.integration_bridge
-    root_helper = config.AGENT.root_helper
     polling_interval = config.AGENT.polling_interval
-    agent = NVSDNeutronAgent(integ_br, root_helper, polling_interval)
-    LOG.info(_("NVSD Agent initialized successfully, now running... "))
+    agent = NVSDNeutronAgent(integ_br, polling_interval)
+    LOG.info(_LI("NVSD Agent initialized successfully, now running... "))
 
     # Start everything.
     agent.daemon_loop()

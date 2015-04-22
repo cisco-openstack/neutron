@@ -18,20 +18,22 @@
 
 """Implements iptables rules using linux utilities."""
 
-import inspect
+import contextlib
 import os
 import re
+import sys
 
-from oslo.config import cfg
-from oslo.utils import excutils
+from oslo_concurrency import lockutils
+from oslo_config import cfg
+from oslo_log import log as logging
+from oslo_utils import excutils
 
 from neutron.agent.common import config
 from neutron.agent.linux import iptables_comments as ic
 from neutron.agent.linux import utils as linux_utils
+from neutron.common import exceptions as n_exc
 from neutron.common import utils
 from neutron.i18n import _LE, _LW
-from neutron.openstack.common import lockutils
-from neutron.openstack.common import log as logging
 
 LOG = logging.getLogger(__name__)
 
@@ -42,7 +44,7 @@ LOG = logging.getLogger(__name__)
 #             (max_chain_name_length - len('-POSTROUTING') == 16)
 def get_binary_name():
     """Grab the name of the binary we're running in."""
-    return os.path.basename(inspect.stack()[-1][1])[:16]
+    return os.path.basename(sys.argv[0])[:16].replace(' ', '_')
 
 binary_name = get_binary_name()
 
@@ -152,8 +154,8 @@ class IptablesTable(object):
         chain_set = self._select_chain_set(wrap)
 
         if name not in chain_set:
-            LOG.warn(_LW('Attempted to remove chain %s which does not exist'),
-                     name)
+            LOG.debug('Attempted to remove chain %s which does not exist',
+                      name)
             return
 
         chain_set.remove(name)
@@ -242,9 +244,6 @@ class IptablesTable(object):
         return [rule for rule in self.rules
                 if rule.chain == chain and rule.wrap == wrap]
 
-    def is_chain_empty(self, chain, wrap=True):
-        return not self._get_chain_rules(chain, wrap)
-
     def empty_chain(self, chain, wrap=True):
         """Remove all rules from a chain."""
         chained_rules = self._get_chain_rules(chain, wrap)
@@ -282,9 +281,8 @@ class IptablesManager(object):
 
     """
 
-    def __init__(self, _execute=None, state_less=False,
-                 root_helper=None, use_ipv6=False, namespace=None,
-                 binary_name=binary_name):
+    def __init__(self, _execute=None, state_less=False, use_ipv6=False,
+                 namespace=None, binary_name=binary_name):
         if _execute:
             self.execute = _execute
         else:
@@ -292,7 +290,6 @@ class IptablesManager(object):
 
         config.register_iptables_opts(cfg.CONF)
         self.use_ipv6 = use_ipv6
-        self.root_helper = root_helper
         self.namespace = namespace
         self.iptables_apply_deferred = False
         self.wrap_name = binary_name[:16]
@@ -319,6 +316,11 @@ class IptablesManager(object):
                           6: {'filter': ['INPUT', 'OUTPUT', 'FORWARD']}}
 
         if not state_less:
+            self.ipv4.update(
+                {'mangle': IptablesTable(binary_name=self.wrap_name)})
+            builtin_chains[4].update(
+                {'mangle': ['PREROUTING', 'INPUT', 'FORWARD', 'OUTPUT',
+                            'POSTROUTING']})
             self.ipv4.update(
                 {'nat': IptablesTable(binary_name=self.wrap_name)})
             builtin_chains[4].update({'nat': ['PREROUTING',
@@ -362,12 +364,34 @@ class IptablesManager(object):
             self.ipv4['nat'].add_chain('float-snat')
             self.ipv4['nat'].add_rule('snat', '-j $float-snat')
 
-    def is_chain_empty(self, table, chain, ip_version=4, wrap=True):
+            # Add a mark chain to mangle PREROUTING chain. It is used to
+            # identify ingress packets from a certain interface.
+            self.ipv4['mangle'].add_chain('mark')
+            self.ipv4['mangle'].add_rule('PREROUTING', '-j $mark')
+
+    def get_chain(self, table, chain, ip_version=4, wrap=True):
         try:
             requested_table = {4: self.ipv4, 6: self.ipv6}[ip_version][table]
         except KeyError:
-            return True
-        return requested_table.is_chain_empty(chain, wrap)
+            return []
+        return requested_table._get_chain_rules(chain, wrap)
+
+    def is_chain_empty(self, table, chain, ip_version=4, wrap=True):
+        return not self.get_chain(table, chain, ip_version, wrap)
+
+    @contextlib.contextmanager
+    def defer_apply(self):
+        """Defer apply context."""
+        self.defer_apply_on()
+        try:
+            yield
+        finally:
+            try:
+                self.defer_apply_off()
+            except Exception:
+                msg = _LE('Failure applying iptables rules')
+                LOG.exception(msg)
+                raise n_exc.IpTablesApplyException(msg)
 
     def defer_apply_on(self):
         self.iptables_apply_deferred = True
@@ -410,7 +434,7 @@ class IptablesManager(object):
             args = ['%s-save' % (cmd,), '-c']
             if self.namespace:
                 args = ['ip', 'netns', 'exec', self.namespace] + args
-            all_tables = self.execute(args, root_helper=self.root_helper)
+            all_tables = self.execute(args, run_as_root=True)
             all_lines = all_tables.split('\n')
             # Traverse tables in sorted order for predictable dump output
             for table_name in sorted(tables):
@@ -424,7 +448,7 @@ class IptablesManager(object):
                 args = ['ip', 'netns', 'exec', self.namespace] + args
             try:
                 self.execute(args, process_input='\n'.join(all_lines),
-                             root_helper=self.root_helper)
+                             run_as_root=True)
             except RuntimeError as r_error:
                 with excutils.save_and_reraise_exception():
                     try:
@@ -673,8 +697,7 @@ class IptablesManager(object):
                 args.append('-Z')
             if self.namespace:
                 args = ['ip', 'netns', 'exec', self.namespace] + args
-            current_table = (self.execute(args,
-                             root_helper=self.root_helper))
+            current_table = self.execute(args, run_as_root=True)
             current_lines = current_table.split('\n')
 
             for line in current_lines[2:]:

@@ -16,14 +16,16 @@
 
 import functools
 
-from oslo.config import cfg
-from oslo import messaging
-from oslo.utils import importutils
+from oslo_config import cfg
+from oslo_log import log as logging
+import oslo_messaging
+from oslo_utils import importutils
 
 from neutron.agent import firewall
+from neutron.common import constants
+from neutron.common import rpc as n_rpc
 from neutron.common import topics
 from neutron.i18n import _LI, _LW
-from neutron.openstack.common import log as logging
 
 LOG = logging.getLogger(__name__)
 # history
@@ -83,8 +85,21 @@ def disable_security_group_extension_by_config(aliases):
         _disable_extension('allowed-address-pairs', aliases)
 
 
-class SecurityGroupServerRpcApiMixin(object):
-    """A mix-in that enable SecurityGroup support in plugin rpc."""
+class SecurityGroupServerRpcApi(object):
+    """RPC client for security group methods in the plugin.
+
+    This class implements the client side of an rpc interface.  This interface
+    is used by agents to call security group related methods implemented on the
+    plugin side.  The other side of this interface can be found in
+    neutron.api.rpc.handlers.SecurityGroupServerRpcCallback.  For more
+    information about changing rpc interfaces, see
+    doc/source/devref/rpc_api.rst.
+    """
+    def __init__(self, topic):
+        target = oslo_messaging.Target(
+            topic=topic, version='1.0',
+            namespace=constants.RPC_NAMESPACE_SECGROUP)
+        self.client = n_rpc.get_client(target)
 
     def security_group_rules_for_devices(self, context, devices):
         LOG.debug("Get security group rules "
@@ -145,10 +160,13 @@ class SecurityGroupAgentRpcCallbackMixin(object):
         self.sg_agent.security_groups_provider_updated()
 
 
-class SecurityGroupAgentRpcMixin(object):
-    """A mix-in that enable SecurityGroup agent
-    support in agent implementations.
-    """
+class SecurityGroupAgentRpc(object):
+    """Enables SecurityGroup agent support in agent implementations."""
+
+    def __init__(self, context, plugin_rpc, defer_refresh_firewall=False):
+        self.context = context
+        self.plugin_rpc = plugin_rpc
+        self.init_firewall(defer_refresh_firewall)
 
     def init_firewall(self, defer_refresh_firewall=False):
         firewall_driver = cfg.CONF.SECURITYGROUP.firewall_driver
@@ -180,7 +198,7 @@ class SecurityGroupAgentRpcMixin(object):
         try:
             self.plugin_rpc.security_group_info_for_devices(
                 self.context, devices=[])
-        except messaging.UnsupportedVersion:
+        except oslo_messaging.UnsupportedVersion:
             LOG.warning(_LW('security_group_info_for_devices rpc call not '
                             'supported by the server, falling back to old '
                             'security_group_rules_for_devices which scales '
@@ -197,7 +215,8 @@ class SecurityGroupAgentRpcMixin(object):
                          "or configured as NoopFirewallDriver."),
                          func.__name__)
             else:
-                return func(self, *args, **kwargs)
+                return func(self,  # pylint: disable=not-callable
+                            *args, **kwargs)
         return decorated_function
 
     @skip_if_noopfirewall_or_firewall_disabled
@@ -356,10 +375,6 @@ class SecurityGroupAgentRpcMixin(object):
                 self.refresh_firewall(updated_devices)
 
 
-# NOTE(russellb) This class has been conditionally converted to use the
-# oslo.messaging APIs because it's a mix-in used in different places.  The
-# conditional usage is temporary until the whole code base has been converted
-# to stop using the RpcProxy compatibility class.
 class SecurityGroupAgentRpcApiMixin(object):
 
     def _get_security_group_topic(self):
@@ -371,45 +386,25 @@ class SecurityGroupAgentRpcApiMixin(object):
         """Notify rule updated security groups."""
         if not security_groups:
             return
-        if hasattr(self, 'client'):
-            cctxt = self.client.prepare(version=SG_RPC_VERSION,
-                                        topic=self._get_security_group_topic(),
-                                        fanout=True)
-            cctxt.cast(context, 'security_groups_rule_updated',
-                       security_groups=security_groups)
-        else:
-            self.fanout_cast(context,
-                             self.make_msg('security_groups_rule_updated',
-                                           security_groups=security_groups),
-                             version=SG_RPC_VERSION,
-                             topic=self._get_security_group_topic())
+        cctxt = self.client.prepare(version=SG_RPC_VERSION,
+                                    topic=self._get_security_group_topic(),
+                                    fanout=True)
+        cctxt.cast(context, 'security_groups_rule_updated',
+                   security_groups=security_groups)
 
     def security_groups_member_updated(self, context, security_groups):
         """Notify member updated security groups."""
         if not security_groups:
             return
-        if hasattr(self, 'client'):
-            cctxt = self.client.prepare(version=SG_RPC_VERSION,
-                                        topic=self._get_security_group_topic(),
-                                        fanout=True)
-            cctxt.cast(context, 'security_groups_member_updated',
-                       security_groups=security_groups)
-        else:
-            self.fanout_cast(context,
-                             self.make_msg('security_groups_member_updated',
-                                           security_groups=security_groups),
-                             version=SG_RPC_VERSION,
-                             topic=self._get_security_group_topic())
+        cctxt = self.client.prepare(version=SG_RPC_VERSION,
+                                    topic=self._get_security_group_topic(),
+                                    fanout=True)
+        cctxt.cast(context, 'security_groups_member_updated',
+                   security_groups=security_groups)
 
     def security_groups_provider_updated(self, context):
         """Notify provider updated security groups."""
-        if hasattr(self, 'client'):
-            cctxt = self.client.prepare(version=SG_RPC_VERSION,
-                                        topic=self._get_security_group_topic(),
-                                        fanout=True)
-            cctxt.cast(context, 'security_groups_member_updated')
-        else:
-            self.fanout_cast(context,
-                             self.make_msg('security_groups_provider_updated'),
-                             version=SG_RPC_VERSION,
-                             topic=self._get_security_group_topic())
+        cctxt = self.client.prepare(version=SG_RPC_VERSION,
+                                    topic=self._get_security_group_topic(),
+                                    fanout=True)
+        cctxt.cast(context, 'security_groups_provider_updated')

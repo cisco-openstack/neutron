@@ -20,10 +20,12 @@ import urllib
 
 import httplib2
 from keystoneclient.v2_0 import client as keyclient
-from oslo.config import cfg
+from oslo_config import cfg
+from oslo_log import log as logging
 
 from neutron.api.v2 import attributes
-from neutron.openstack.common import log as logging
+from neutron.common import utils
+from neutron.i18n import _LE, _LI
 from neutron.plugins.ibm.common import config  # noqa
 from neutron.plugins.ibm.common import constants
 from neutron import wsgi
@@ -72,10 +74,10 @@ class RequestHandler(object):
         self.base_url = base_url or cfg.CONF.SDNVE.base_url
         self.controller_ips = controller_ips or cfg.CONF.SDNVE.controller_ips
 
-        LOG.info(_("The IP addr of available SDN-VE controllers: %s"),
+        LOG.info(_LI("The IP addr of available SDN-VE controllers: %s"),
                  self.controller_ips)
         self.controller_ip = self.controller_ips[0]
-        LOG.info(_("The SDN-VE controller IP address: %s"),
+        LOG.info(_LI("The SDN-VE controller IP address: %s"),
                  self.controller_ip)
 
         self.new_controller = False
@@ -159,37 +161,37 @@ class RequestHandler(object):
                 myurl += '?' + urllib.urlencode(params, doseq=1)
 
             try:
-                LOG.debug(_("Sending request to SDN-VE. url: "
-                            "%(myurl)s method: %(method)s body: "
-                            "%(body)s header: %(header)s "),
+                LOG.debug("Sending request to SDN-VE. url: "
+                          "%(myurl)s method: %(method)s body: "
+                          "%(body)s header: %(header)s ",
                           {'myurl': myurl, 'method': method,
                            'body': body, 'header': self.headers})
                 resp, replybody = self.httpclient.request(
                     myurl, method=method, body=body, headers=self.headers)
-                LOG.debug(("Response recd from SDN-VE. resp: %(resp)s"
-                           "body: %(body)s"),
+                LOG.debug("Response recd from SDN-VE. resp: %(resp)s "
+                          "body: %(body)s",
                           {'resp': resp.status, 'body': replybody})
                 status_code = resp.status
 
             except Exception as e:
-                LOG.error(_("Error: Could not reach server: %(url)s "
-                            "Exception: %(excp)s."),
+                LOG.error(_LE("Error: Could not reach server: %(url)s "
+                              "Exception: %(excp)s."),
                           {'url': myurl, 'excp': e})
                 self.cookie = None
                 continue
 
             if status_code not in constants.HTTP_ACCEPTABLE:
-                LOG.debug(_("Error message: %(reply)s --  Status: %(status)s"),
+                LOG.debug("Error message: %(reply)s --  Status: %(status)s",
                           {'reply': replybody, 'status': status_code})
             else:
-                LOG.debug(_("Received response status: %s"), status_code)
+                LOG.debug("Received response status: %s", status_code)
 
             if resp.get('set-cookie'):
                 self.cookie = resp['set-cookie']
             replybody_deserialized = self.deserialize(
                 replybody,
                 status_code)
-            LOG.debug(_("Deserialized body: %s"), replybody_deserialized)
+            LOG.debug("Deserialized body: %s", replybody_deserialized)
             if controller_ip != self.controller_ip:
                 # bcast the change of controller
                 self.new_controller = True
@@ -231,7 +233,7 @@ class Client(RequestHandler):
 
         res = self.resource_path.get(resource, None)
         if not res:
-            LOG.info(_("Bad resource for forming a list request"))
+            LOG.info(_LI("Bad resource for forming a list request"))
             return 0, ''
 
         return self.get(res, params=params)
@@ -241,7 +243,7 @@ class Client(RequestHandler):
 
         res = self.resource_path.get(resource, None)
         if not res:
-            LOG.info(_("Bad resource for forming a show request"))
+            LOG.info(_LI("Bad resource for forming a show request"))
             return 0, ''
 
         return self.get(res + specific, params=params)
@@ -251,7 +253,7 @@ class Client(RequestHandler):
 
         res = self.resource_path.get(resource, None)
         if not res:
-            LOG.info(_("Bad resource for forming a create request"))
+            LOG.info(_LI("Bad resource for forming a create request"))
             return 0, ''
 
         body = self.process_request(body)
@@ -263,7 +265,7 @@ class Client(RequestHandler):
 
         res = self.resource_path.get(resource, None)
         if not res:
-            LOG.info(_("Bad resource for forming a update request"))
+            LOG.info(_LI("Bad resource for forming a update request"))
             return 0, ''
 
         body = self.process_request(body)
@@ -274,7 +276,7 @@ class Client(RequestHandler):
 
         res = self.resource_path.get(resource, None)
         if not res:
-            LOG.info(_("Bad resource for forming a delete request"))
+            LOG.info(_LI("Bad resource for forming a delete request"))
             return 0, ''
 
         return self.delete(res + specific)
@@ -302,7 +304,7 @@ class Client(RequestHandler):
             if not network_type:
                 return tenant_id
             if tenant_type != network_type:
-                LOG.info(_("Non matching tenant and network types: "
+                LOG.info(_LI("Non matching tenant and network types: "
                            "%(ttype)s %(ntype)s"),
                          {'ttype': tenant_type, 'ntype': network_type})
                 return
@@ -340,15 +342,14 @@ class KeystoneClient(object):
                  auth_url=None):
 
         keystone_conf = cfg.CONF.keystone_authtoken
-        keystone_auth_url = ('%s://%s:%s/v2.0/' %
-                             (keystone_conf.auth_protocol,
-                              keystone_conf.auth_host,
-                              keystone_conf.auth_port))
 
         username = username or keystone_conf.admin_user
         tenant_name = tenant_name or keystone_conf.admin_tenant_name
         password = password or keystone_conf.admin_password
-        auth_url = auth_url or keystone_auth_url
+        # FIXME(ihrachys): plugins should not construct keystone URL
+        # from configuration file and should instead rely on service
+        # catalog contents
+        auth_url = auth_url or utils.get_keystone_url(keystone_conf)
 
         self.overlay_signature = cfg.CONF.SDNVE.overlay_signature
         self.of_signature = cfg.CONF.SDNVE.of_signature
@@ -364,7 +365,7 @@ class KeystoneClient(object):
         try:
             return self.client.tenants.get(id)
         except Exception:
-            LOG.exception(_("Did not find tenant: %r"), id)
+            LOG.exception(_LE("Did not find tenant: %r"), id)
 
     def get_tenant_type(self, id):
 

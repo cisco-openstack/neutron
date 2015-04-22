@@ -15,11 +15,10 @@
 
 import abc
 
-from oslo.config import cfg
+from oslo_config import cfg
 
 from neutron.api.v2 import attributes
 from neutron.api.v2 import resource_helper
-from neutron.plugins.vmware.common import utils
 
 GATEWAY_RESOURCE_NAME = "network_gateway"
 DEVICE_RESOURCE_NAME = "gateway_device"
@@ -30,6 +29,20 @@ GATEWAY_DEVICES = "%ss" % DEVICE_RESOURCE_NAME.replace('_', '-')
 DEVICE_ID_ATTR = 'id'
 IFACE_NAME_ATTR = 'interface_name'
 
+
+# TODO(salv-orlando): This type definition is duplicated into
+# stackforge/vmware-nsx. This temporary duplication should be removed once the
+# plugin decomposition is finished.
+# Allowed network types for the NSX Plugin
+class NetworkTypes(object):
+    """Allowed provider network types for the NSX Plugin."""
+    L3_EXT = 'l3_ext'
+    STT = 'stt'
+    GRE = 'gre'
+    FLAT = 'flat'
+    VLAN = 'vlan'
+    BRIDGE = 'bridge'
+
 # Attribute Map for Network Gateway Resource
 # TODO(salvatore-orlando): add admin state as other neutron resources
 RESOURCE_ATTRIBUTE_MAP = {
@@ -37,7 +50,7 @@ RESOURCE_ATTRIBUTE_MAP = {
         'id': {'allow_post': False, 'allow_put': False,
                'is_visible': True},
         'name': {'allow_post': True, 'allow_put': True,
-                 'validate': {'type:string': None},
+                 'validate': {'type:string': attributes.NAME_MAX_LEN},
                  'is_visible': True, 'default': ''},
         'default': {'allow_post': False, 'allow_put': False,
                     'is_visible': True},
@@ -48,7 +61,8 @@ RESOURCE_ATTRIBUTE_MAP = {
                   'default': [],
                   'is_visible': True},
         'tenant_id': {'allow_post': True, 'allow_put': False,
-                      'validate': {'type:string': None},
+                      'validate': {'type:string':
+                                   attributes.TENANT_ID_MAX_LEN},
                       'required_by_policy': True,
                       'is_visible': True}
     },
@@ -56,7 +70,7 @@ RESOURCE_ATTRIBUTE_MAP = {
         'id': {'allow_post': False, 'allow_put': False,
                'is_visible': True},
         'name': {'allow_post': True, 'allow_put': True,
-                 'validate': {'type:string': None},
+                 'validate': {'type:string': attributes.NAME_MAX_LEN},
                  'is_visible': True, 'default': ''},
         'client_certificate': {'allow_post': True, 'allow_put': True,
                                'validate': {'type:string': None},
@@ -68,7 +82,8 @@ RESOURCE_ATTRIBUTE_MAP = {
                          'validate': {'type:ip_address': None},
                          'is_visible': True},
         'tenant_id': {'allow_post': True, 'allow_put': False,
-                      'validate': {'type:string': None},
+                      'validate': {'type:string':
+                                   attributes.TENANT_ID_MAX_LEN},
                       'required_by_policy': True,
                       'is_visible': True},
         'status': {'allow_post': False, 'allow_put': False,
@@ -111,11 +126,11 @@ def _validate_connector_type(data, valid_values=None):
         msg = _("A connector type is required to create a gateway device")
         return msg
     connector_types = (valid_values if valid_values else
-                       [utils.NetworkTypes.GRE,
-                        utils.NetworkTypes.STT,
-                        utils.NetworkTypes.BRIDGE,
-                        'ipsec%s' % utils.NetworkTypes.GRE,
-                        'ipsec%s' % utils.NetworkTypes.STT])
+                       [NetworkTypes.GRE,
+                        NetworkTypes.STT,
+                        NetworkTypes.BRIDGE,
+                        'ipsec%s' % NetworkTypes.GRE,
+                        'ipsec%s' % NetworkTypes.STT])
     if data not in connector_types:
         msg = _("Unknown connector type: %s") % data
         return msg

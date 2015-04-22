@@ -17,8 +17,9 @@ from eventlet import greenthread
 from eventlet import queue
 from heleosapi import constants as h_con
 from heleosapi import exceptions as h_exc
+from oslo_log import log as logging
 
-from neutron.openstack.common import log as logging
+from neutron.i18n import _LE
 from neutron.plugins.embrane.agent.operations import router_operations
 from neutron.plugins.embrane.common import constants as p_con
 from neutron.plugins.embrane.common import contexts as ctx
@@ -107,10 +108,10 @@ class Dispatcher(object):
                         h_exc.BrokenInterface, h_exc.DvaCreationFailed,
                         h_exc.DvaCreationPending, h_exc.BrokenDva,
                         h_exc.ConfigurationFailed) as ex:
-                    LOG.warning(p_con.error_map[type(ex)] % ex.message)
+                    LOG.warning(p_con.error_map[type(ex)], ex.message)
                     transient_state = p_con.Status.ERROR
                 except h_exc.DvaDeleteFailed as ex:
-                    LOG.warning(p_con.error_map[type(ex)] % ex.message)
+                    LOG.warning(p_con.error_map[type(ex)], ex.message)
                     transient_state = p_con.Status.DELETED
                 finally:
                     # if the returned transient state is None, no operations
@@ -127,4 +128,4 @@ class Dispatcher(object):
                                 operation_context.item,
                                 transient_state)
             except Exception:
-                LOG.exception(_("Unhandled exception occurred"))
+                LOG.exception(_LE("Unhandled exception occurred"))

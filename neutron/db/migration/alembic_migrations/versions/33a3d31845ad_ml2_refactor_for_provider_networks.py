@@ -16,14 +16,14 @@
 """ML2 Refactor for provider networks
 
 Revision ID: 33a3d31845ad
-Revises: 2d2a8a565438
+Revises: 20c469a5f920
 Create Date: 2014-08-18 14:33:13.124512
 
 """
 
 # revision identifiers, used by Alembic.
 revision = '33a3d31845ad'
-down_revision = '2d2a8a565438'
+down_revision = '20c469a5f920'
 
 from alembic import op
 import sqlalchemy as sa

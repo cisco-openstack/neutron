@@ -24,6 +24,7 @@ PORT_STATUS_ACTIVE = 'ACTIVE'
 PORT_STATUS_BUILD = 'BUILD'
 PORT_STATUS_DOWN = 'DOWN'
 PORT_STATUS_ERROR = 'ERROR'
+PORT_STATUS_NOTAPPLICABLE = 'N/A'
 
 FLOATINGIP_STATUS_ACTIVE = 'ACTIVE'
 FLOATINGIP_STATUS_DOWN = 'DOWN'
@@ -38,6 +39,15 @@ DEVICE_OWNER_DVR_INTERFACE = "network:router_interface_distributed"
 DEVICE_OWNER_AGENT_GW = "network:floatingip_agent_gateway"
 DEVICE_OWNER_ROUTER_SNAT = "network:router_centralized_snat"
 DEVICE_OWNER_LOADBALANCER = "neutron:LOADBALANCER"
+
+# Collection used to identify devices owned by router interfaces.
+# DEVICE_OWNER_ROUTER_HA_INTF is a special case and so is not included.
+ROUTER_INTERFACE_OWNERS = (DEVICE_OWNER_ROUTER_INTF,
+                           DEVICE_OWNER_DVR_INTERFACE)
+L3_AGENT_MODE_DVR = 'dvr'
+L3_AGENT_MODE_DVR_SNAT = 'dvr_snat'
+L3_AGENT_MODE_LEGACY = 'legacy'
+L3_AGENT_MODE = 'agent_mode'
 
 DEVICE_ID_RESERVED_DHCP_PORT = "reserved_dhcp_port"
 
@@ -56,6 +66,13 @@ MINIMUM_AGENTS_FOR_HA = 2
 
 IPv4 = 'IPv4'
 IPv6 = 'IPv6'
+IP_VERSION_4 = 4
+IP_VERSION_6 = 6
+IPv4_BITS = 32
+IPv6_BITS = 128
+
+IPv4_ANY = '0.0.0.0/0'
+IPv6_ANY = '::/0'
 
 DHCP_RESPONSE_PORT = 68
 
@@ -98,6 +115,7 @@ DHCP_AGENT_SCHEDULER_EXT_ALIAS = 'dhcp_agent_scheduler'
 LBAAS_AGENT_SCHEDULER_EXT_ALIAS = 'lbaas_agent_scheduler'
 L3_DISTRIBUTED_EXT_ALIAS = 'dvr'
 L3_HA_MODE_EXT_ALIAS = 'l3-ha'
+SUBNET_ALLOCATION_EXT_ALIAS = 'subnet_allocation'
 
 # Protocol names and numbers for Security Groups/Firewalls
 PROTO_NAME_TCP = 'tcp'
@@ -125,6 +143,10 @@ IPV6_MODES = [DHCPV6_STATEFUL, DHCPV6_STATELESS, IPV6_SLAAC]
 
 IPV6_LLA_PREFIX = 'fe80::/64'
 
+# Human-readable ID to which default_ipv6_subnet_pool should be set to
+# indicate that IPv6 Prefix Delegation should be used to allocate subnet CIDRs
+IPV6_PD_POOL_ID = 'prefix_delegation'
+
 # Linux interface max length
 DEVICE_NAME_MAX_LEN = 15
 
@@ -137,3 +159,21 @@ ATTRIBUTES_TO_UPDATE = 'attributes_to_update'
 # In SQLite integer can be stored in 1, 2, 3, 4, 6, or 8 bytes,
 # but here it will be limited by this value for consistency.
 DB_INTEGER_MAX_VALUE = 2 ** 31 - 1
+
+# TODO(amuller): Re-define the RPC namespaces once Oslo messaging supports
+# Targets with multiple namespaces. Neutron will then implement callbacks
+# for its RPC clients in order to support rolling upgrades.
+
+# RPC Interface for agents to call DHCP API implemented on the plugin side
+RPC_NAMESPACE_DHCP_PLUGIN = None
+# RPC interface for the metadata service to get info from the plugin side
+RPC_NAMESPACE_METADATA = None
+# RPC interface for agent to plugin security group API
+RPC_NAMESPACE_SECGROUP = None
+# RPC interface for agent to plugin DVR api
+RPC_NAMESPACE_DVR = None
+# RPC interface for reporting state back to the plugin
+RPC_NAMESPACE_STATE = None
+
+# Default network MTU value when not configured
+DEFAULT_NETWORK_MTU = 0

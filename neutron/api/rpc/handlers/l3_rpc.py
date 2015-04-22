@@ -13,9 +13,10 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from oslo.config import cfg
-from oslo import messaging
-from oslo.serialization import jsonutils
+from oslo_config import cfg
+from oslo_log import log as logging
+import oslo_messaging
+from oslo_serialization import jsonutils
 
 from neutron.common import constants
 from neutron.common import exceptions
@@ -25,7 +26,6 @@ from neutron.extensions import l3
 from neutron.extensions import portbindings
 from neutron.i18n import _LE
 from neutron import manager
-from neutron.openstack.common import log as logging
 from neutron.plugins.common import constants as plugin_constants
 
 
@@ -35,12 +35,14 @@ LOG = logging.getLogger(__name__)
 class L3RpcCallback(object):
     """L3 agent RPC callback in plugin implementations."""
 
-    # 1.0  L3PluginApi BASE_RPC_API_VERSION
-    # 1.1  Support update_floatingip_statuses
+    # 1.0 L3PluginApi BASE_RPC_API_VERSION
+    # 1.1 Support update_floatingip_statuses
     # 1.2 Added methods for DVR support
     # 1.3 Added a method that returns the list of activated services
-    # 1.4 Added L3 HA update_router_state
-    target = messaging.Target(version='1.4')
+    # 1.4 Added L3 HA update_router_state. This method was later removed,
+    #     since it was unused. The RPC version was not changed
+    # 1.5 Added update_ha_routers_states
+    target = oslo_messaging.Target(version='1.5')
 
     @property
     def plugin(self):
@@ -125,8 +127,8 @@ class L3RpcCallback(object):
                                         {'port': {portbindings.HOST_ID: host}})
             except exceptions.PortNotFound:
                 LOG.debug("Port %(port)s not found while updating "
-                          "agent binding for router %(router)s."
-                          % {"port": port['id'], "router": router_id})
+                          "agent binding for router %(router)s.",
+                          {"port": port['id'], "router": router_id})
         elif (port and
               port.get('device_owner') ==
               constants.DEVICE_OWNER_DVR_INTERFACE):
@@ -209,32 +211,14 @@ class L3RpcCallback(object):
                   'host': host})
         return agent_port
 
-    def get_snat_router_interface_ports(self, context, **kwargs):
-        """Get SNAT serviced Router Port List.
+    def update_ha_routers_states(self, context, **kwargs):
+        """Update states for HA routers.
 
-        The Service Node that hosts the SNAT service requires
-        the ports to service the router interfaces.
-        This function will check if any available ports, if not
-        it will create ports on the routers interfaces and
-        will send a list to the L3 agent.
+        Get a map of router_id to its HA state on a host and update the DB.
+        State must be in: ('active', 'standby').
         """
-        router_id = kwargs.get('router_id')
-        host = kwargs.get('host')
-        admin_ctx = neutron_context.get_admin_context()
-        snat_port_list = (
-            self.l3plugin.create_snat_intf_port_list_if_not_exists(
-                admin_ctx, router_id))
-        for p in snat_port_list:
-            self._ensure_host_set_on_port(admin_ctx, host, p)
-        LOG.debug('SNAT interface ports returned : %(snat_port_list)s '
-                  'and on host %(host)s', {'snat_port_list': snat_port_list,
-                  'host': host})
-        return snat_port_list
-
-    def update_router_state(self, context, **kwargs):
-        router_id = kwargs.get('router_id')
-        state = kwargs.get('state')
+        states = kwargs.get('states')
         host = kwargs.get('host')
 
-        return self.l3plugin.update_router_state(context, router_id, state,
-                                                 host=host)
+        LOG.debug('Updating HA routers states on host %s: %s', host, states)
+        self.l3plugin.update_routers_states(context, states, host)

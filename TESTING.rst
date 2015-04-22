@@ -4,16 +4,46 @@ Testing Neutron
 Overview
 --------
 
-The unit tests (neutron/test/unit/) are meant to cover as much code as
+Neutron relies on different types of testing to ensure its quality, as
+described below.  In addition to in-tree testing, `Tempest`_ is
+responsible for validating Neutron's integration with other OpenStack
+components, and `Rally`_ is responsible for benchmarking.
+
+.. _Tempest: http://docs.openstack.org/developer/tempest/
+.. _Rally: http://rally.readthedocs.org/en/latest/
+
+Unit Tests
+~~~~~~~~~~
+
+Unit tests (neutron/test/unit/) are meant to cover as much code as
 possible and should be executed without the service running. They are
 designed to test the various pieces of the neutron tree to make sure
 any new changes don't break existing functionality.
 
-The functional tests (neutron/tests/functional/) are intended to
+Functional Tests
+~~~~~~~~~~~~~~~~
+
+Functional tests (neutron/tests/functional/) are intended to
 validate actual system interaction.  Mocks should be used sparingly,
 if at all.  Care should be taken to ensure that existing system
 resources are not modified and that resources created in tests are
 properly cleaned up.
+
+API Tests
+~~~~~~~~~
+
+API tests (neutron/tests/api/) are intended to ensure the function
+and stability of the Neutron API.  As much as possible, changes to
+this path should not be made at the same time as changes to the code
+to limit the potential for introducing backwards-incompatible changes.
+
+Since API tests need to be able to target a deployed Neutron daemon
+that is not necessarily test-managed, they should not depend on
+controlling the runtime configuration of the target daemon.  API tests
+should be black-box - no assumptions should be made about
+implementation.  Only the contract defined by Neutron's REST API
+should be validated, and all interaction with the daemon should be via
+a REST client.
 
 Development process
 -------------------
@@ -24,10 +54,43 @@ fixes that are submitted also have tests to prove that they stay
 fixed!  In addition, before proposing for merge, all of the
 current tests should be passing.
 
+Structure of the unit test tree
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+The structure of the unit test tree should match the structure of the
+code tree, e.g. ::
+
+ - target module: neutron.agent.utils
+
+ - test module: neutron.tests.unit.agent.test_utils
+
+Unit test modules should have the same path under neutron/tests/unit/
+as the module they target has under neutron/, and their name should be
+the name of the target module prefixed by 'test_'.  This requirement
+is intended to make it easier for developers to find the unit tests
+for a given module.
+
+Similarly, when a test module targets a package, that module's name
+should be the name of the package prefixed by 'test_' with the same
+path as when a test targets a module, e.g. ::
+
+ - target package: neutron.ipam
+
+ - test module: neutron.tests.unit.test_ipam
+
+The following command can be used to validate whether the unit test
+tree is structured according to the above requirements: ::
+
+    ./tools/check_unit_test_structure.sh
+
+Where appropriate, exceptions can be added to the above script.  If
+code is not part of the neutron namespace, for example, it's probably
+reasonable to exclude their unit tests from the check.
+
 Virtual environments
 ~~~~~~~~~~~~~~~~~~~~
 
-Testing OpenStack projects, including Neutron, is made easier with `DevStack <https://github.com/openstack-dev/devstack>`_.
+Testing OpenStack projects, including Neutron, is made easier with `DevStack <https://git.openstack.org/cgit/openstack-dev/devstack>`_.
 
 Create a machine (such as a VM or Vagrant box) running a distribution supported
 by DevStack and install DevStack there. For example, there is a Vagrant script
@@ -39,11 +102,11 @@ for DevStack at https://github.com/bcwaldon/vagrant_devstack.
     machine and develop from there.
 
 
-Running unit tests
-------------------
+Running tests
+-------------
 
 There are three mechanisms for running tests: run_tests.sh, tox,
-and nose. Before submitting a patch for review you should always
+and nose2. Before submitting a patch for review you should always
 ensure all test pass; a tox run is triggered by the jenkins gate
 executed on gerrit for each patch pushed for review.
 
@@ -63,24 +126,38 @@ tests in a virtualenv::
     ./run_tests -V
 
 
-With `nose`
-~~~~~~~~~~~
+With `nose2`
+~~~~~~~~~~~~
 
-You can use `nose`_ to run individual tests, as well as use for debugging
+You can use `nose2`_ to run individual tests, as well as use for debugging
 portions of your code::
 
     source .venv/bin/activate
-    pip install nose
-    nosetests
+    pip install nose2
+    nose2
 
-There are disadvantages to running Nose - the tests are run sequentially, so
+There are disadvantages to running nose2 - the tests are run sequentially, so
 race condition bugs will not be triggered, and the full test suite will
 take significantly longer than tox & testr. The upside is that testr has
 some rough edges when it comes to diagnosing errors and failures, and there is
 no easy way to set a breakpoint in the Neutron code, and enter an
 interactive debugging session while using testr.
 
+It is also possible to use nose2's predecessor, `nose`_, to run the tests::
+
+    source .venv/bin/activate
+    pip install nose
+    nosetests
+
+nose has one additional disadvantage over nose2 - it does not
+understand the `load_tests protocol`_ introduced in Python 2.7.  This
+limitation will result in errors being reported for modules that
+depend on load_tests (usually due to use of `testscenarios`_).
+
+.. _nose2: http://nose2.readthedocs.org/en/latest/index.html
 .. _nose: https://nose.readthedocs.org/en/latest/index.html
+.. _load_tests protocol: https://docs.python.org/2/library/unittest.html#load-tests-protocol
+.. _testscenarios: https://pypi.python.org/pypi/testscenarios/
 
 With `tox`
 ~~~~~~~~~~
@@ -95,21 +172,6 @@ versions of Python (2.6, 2.7, 3.3, etc).
 Testr handles the parallel execution of series of test cases as well as
 the tracking of long-running tests and other things.
 
-Running unit tests is as easy as executing this in the root directory of the
-Neutron source code::
-
-    tox
-
-To run functional tests that do not require sudo privileges or
-specific-system dependencies::
-
-    tox -e functional
-
-To run all the functional tests in an environment that has been configured
-by devstack to support sudo and system-specific dependencies::
-
-    tox -e dsvm-functional
-
 For more information on the standard Tox-based test infrastructure used by
 OpenStack and how to do some common test/debugging procedures with Testr,
 see this wiki page:
@@ -119,6 +181,81 @@ see this wiki page:
 .. _Testr: https://wiki.openstack.org/wiki/Testr
 .. _tox: http://tox.readthedocs.org/en/latest/
 .. _virtualenvs: https://pypi.python.org/pypi/virtualenv
+
+PEP8 and Unit Tests
+===================
+
+Running pep8 and unit tests is as easy as executing this in the root
+directory of the Neutron source code::
+
+    tox
+
+To run only pep8::
+
+    tox -e pep8
+
+To run only the unit tests::
+
+    tox -e py27
+
+Functional Tests
+================
+
+To run functional tests that do not require sudo privileges or
+specific-system dependencies::
+
+    tox -e functional
+
+To run all the functional tests, including those requiring sudo
+privileges and system-specific dependencies, the procedure defined by
+tools/configure_for_func_testing.sh should be followed.
+
+IMPORTANT: configure_for_func_testing.sh relies on devstack to perform
+extensive modification to the underlying host.  Execution of the
+script requires sudo privileges and it is recommended that the
+following commands be invoked only on a clean and disposeable VM.  A
+VM that has had devstack previously installed on it is also fine. ::
+
+    git clone https://git.openstack.org/openstack-dev/devstack ../devstack
+    ./tools/configure_for_func_testing.sh ../devstack -i
+    tox -e dsvm-functional
+
+The '-i' option is optional and instructs the script to use devstack
+to install and configure all of Neutron's package dependencies.  It is
+not necessary to provide this option if devstack has already been used
+to deploy Neutron to the target host.
+
+Fullstack Tests
+===============
+
+To run all the full-stack tests, you may use: ::
+
+    tox -e dsvm-fullstack
+
+Since full-stack tests often require the same resources and
+dependencies as the functional tests, using the configuration script
+tools/configure_for_func_testing.sh is advised (as described above).
+When running full-stack tests on a clean VM for the first time, we
+advise to run ./stack.sh successfully to make sure all Neutron's
+dependencies are met.  Also note that in order to preserve resources
+on the gate, running the dsvm-functional suite will also run all
+full-stack tests (and a new worker won't be assigned specifically for
+dsvm-fullstack).
+
+API Tests
+=========
+
+To run the api tests, deploy tempest and neutron with devstack and
+then run the following command: ::
+
+    tox -e api
+
+If tempest.conf cannot be found at the default location used by
+devstack (/opt/stack/tempest/etc) it may be necessary to set
+TEMPEST_CONFIG_DIR before invoking tox: ::
+
+    export TEMPEST_CONFIG_DIR=[path to dir containing tempest.conf]
+    tox -e api
 
 
 Running individual tests

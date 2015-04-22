@@ -14,7 +14,7 @@
 #    under the License.
 
 from apicapi import apic_mapper
-from oslo.utils import excutils
+from oslo_utils import excutils
 
 from neutron.db import db_base_plugin_v2
 from neutron.db import extraroute_db
@@ -63,6 +63,7 @@ class ApicL3ServicePlugin(db_base_plugin_v2.NeutronDbPluginV2,
                     mechanism_apic.APICMechanismDriver.
                     get_router_synchronizer(inst))
                 inst.synchronizer.sync_router()
+            # pylint: disable=not-callable
             return f(inst, *args, **kwargs)
         return inner
 

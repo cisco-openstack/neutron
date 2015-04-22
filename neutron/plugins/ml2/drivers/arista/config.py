@@ -14,22 +14,22 @@
 # limitations under the License.
 
 
-from oslo.config import cfg
+from oslo_config import cfg
 
-""" Arista ML2 Mechanism driver specific configuration knobs.
 
-Following are user configurable options for Arista ML2 Mechanism
-driver. The eapi_username, eapi_password, and eapi_host are
-required options. Region Name must be the same that is used by
-Keystone service. This option is available to support multiple
-OpenStack/Neutron controllers.
-"""
+# Arista ML2 Mechanism driver specific configuration knobs.
+#
+# Following are user configurable options for Arista ML2 Mechanism
+# driver. The eapi_username, eapi_password, and eapi_host are
+# required options. Region Name must be the same that is used by
+# Keystone service. This option is available to support multiple
+# OpenStack/Neutron controllers.
 
 ARISTA_DRIVER_OPTS = [
     cfg.StrOpt('eapi_username',
                default='',
                help=_('Username for Arista EOS. This is required field. '
-                      'If not set, all communications to Arista EOS'
+                      'If not set, all communications to Arista EOS '
                       'will fail.')),
     cfg.StrOpt('eapi_password',
                default='',
@@ -40,7 +40,7 @@ ARISTA_DRIVER_OPTS = [
     cfg.StrOpt('eapi_host',
                default='',
                help=_('Arista EOS IP address. This is required field. '
-                      'If not set, all communications to Arista EOS'
+                      'If not set, all communications to Arista EOS '
                       'will fail.')),
     cfg.BoolOpt('use_fqdn',
                 default=True,
@@ -112,7 +112,7 @@ ARISTA_L3_PLUGIN = [
                 default=False,
                 help=_('A "True" value for this flag indicates to create a '
                        'router in VRF. If not set, all routers are created '
-                       'in default VRF.'
+                       'in default VRF. '
                        'This is optional. If not set, a value of "False" '
                        'is assumed.')),
     cfg.IntOpt('l3_sync_interval',

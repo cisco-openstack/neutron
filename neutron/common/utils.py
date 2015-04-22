@@ -23,6 +23,7 @@ import functools
 import hashlib
 import logging as std_logging
 import multiprocessing
+import netaddr
 import os
 import random
 import signal
@@ -30,12 +31,12 @@ import socket
 import uuid
 
 from eventlet.green import subprocess
-from oslo.config import cfg
-from oslo.utils import excutils
+from oslo_concurrency import lockutils
+from oslo_config import cfg
+from oslo_log import log as logging
+from oslo_utils import excutils
 
 from neutron.common import constants as q_const
-from neutron.openstack.common import lockutils
-from neutron.openstack.common import log as logging
 
 
 TIME_FORMAT = "%Y-%m-%dT%H:%M:%SZ"
@@ -178,10 +179,11 @@ def _subprocess_setup():
 
 
 def subprocess_popen(args, stdin=None, stdout=None, stderr=None, shell=False,
-                     env=None):
+                     env=None, preexec_fn=_subprocess_setup, close_fds=True):
+
     return subprocess.Popen(args, shell=shell, stdin=stdin, stdout=stdout,
-                            stderr=stderr, preexec_fn=_subprocess_setup,
-                            close_fds=True, env=env)
+                            stderr=stderr, preexec_fn=preexec_fn,
+                            close_fds=close_fds, env=env)
 
 
 def parse_mappings(mapping_list, unique_values=True):
@@ -346,14 +348,73 @@ class exception_logger(object):
 
 
 def is_dvr_serviced(device_owner):
-        """Check if the port need to be serviced by DVR
+    """Check if the port need to be serviced by DVR
 
-        Helper function to check the device owners of the
-        ports in the compute and service node to make sure
-        if they are required for DVR or any service directly or
-        indirectly associated with DVR.
-        """
-        dvr_serviced_device_owners = (q_const.DEVICE_OWNER_LOADBALANCER,
-                                      q_const.DEVICE_OWNER_DHCP)
-        return (device_owner.startswith('compute:') or
-                device_owner in dvr_serviced_device_owners)
+    Helper function to check the device owners of the
+    ports in the compute and service node to make sure
+    if they are required for DVR or any service directly or
+    indirectly associated with DVR.
+    """
+    dvr_serviced_device_owners = (q_const.DEVICE_OWNER_LOADBALANCER,
+                                  q_const.DEVICE_OWNER_DHCP)
+    return (device_owner.startswith('compute:') or
+            device_owner in dvr_serviced_device_owners)
+
+
+def get_keystone_url(conf):
+    if conf.auth_uri:
+        auth_uri = conf.auth_uri.rstrip('/')
+    else:
+        auth_uri = ('%(protocol)s://%(host)s:%(port)s' %
+            {'protocol': conf.auth_protocol,
+             'host': conf.auth_host,
+             'port': conf.auth_port})
+    # NOTE(ihrachys): all existing consumers assume version 2.0
+    return '%s/v2.0/' % auth_uri
+
+
+def ip_to_cidr(ip, prefix=None):
+    """Convert an ip with no prefix to cidr notation
+
+    :param ip: An ipv4 or ipv6 address.  Convertable to netaddr.IPNetwork.
+    :param prefix: Optional prefix.  If None, the default 32 will be used for
+        ipv4 and 128 for ipv6.
+    """
+    net = netaddr.IPNetwork(ip)
+    if prefix is not None:
+        # Can't pass ip and prefix separately.  Must concatenate strings.
+        net = netaddr.IPNetwork(str(net.ip) + '/' + str(prefix))
+    return str(net)
+
+
+def fixed_ip_cidrs(fixed_ips):
+    """Create a list of a port's fixed IPs in cidr notation.
+
+    :param fixed_ips: A neutron port's fixed_ips dictionary
+    """
+    return [ip_to_cidr(fixed_ip['ip_address'], fixed_ip.get('prefixlen'))
+            for fixed_ip in fixed_ips]
+
+
+def is_cidr_host(cidr):
+    """Determines if the cidr passed in represents a single host network
+
+    :param cidr: Either an ipv4 or ipv6 cidr.
+    :returns: True if the cidr is /32 for ipv4 or /128 for ipv6.
+    :raises ValueError: raises if cidr does not contain a '/'.  This disallows
+        plain IP addresses specifically to avoid ambiguity.
+    """
+    if '/' not in str(cidr):
+        raise ValueError("cidr doesn't contain a '/'")
+    net = netaddr.IPNetwork(cidr)
+    if net.version == 4:
+        return net.prefixlen == q_const.IPv4_BITS
+    return net.prefixlen == q_const.IPv6_BITS
+
+
+def ip_version_from_int(ip_version_int):
+    if ip_version_int == 4:
+        return q_const.IPv4
+    if ip_version_int == 6:
+        return q_const.IPv6
+    raise ValueError(_('Illegal IP version number'))

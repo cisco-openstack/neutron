@@ -26,11 +26,12 @@ import sys
 import time
 
 import eventlet.wsgi
-eventlet.patcher.monkey_patch(all=False, socket=True, thread=True)
-from oslo.config import cfg
-from oslo import i18n
-from oslo.serialization import jsonutils
-from oslo.utils import excutils
+from oslo_config import cfg
+import oslo_i18n
+from oslo_log import log as logging
+from oslo_log import loggers
+from oslo_serialization import jsonutils
+from oslo_utils import excutils
 import routes.middleware
 import webob.dec
 import webob.exc
@@ -38,7 +39,7 @@ import webob.exc
 from neutron.common import exceptions as exception
 from neutron import context
 from neutron.db import api
-from neutron.openstack.common import log as logging
+from neutron.i18n import _LE, _LI
 from neutron.openstack.common import service as common_service
 from neutron.openstack.common import systemd
 
@@ -69,6 +70,18 @@ socket_opts = [
     cfg.StrOpt('ssl_key_file',
                help=_("Private key file to use when starting "
                       "the server securely")),
+    cfg.BoolOpt('wsgi_keep_alive',
+                default=True,
+                help=_("Determines if connections are allowed to be held "
+                     "open by clients after a request is fulfilled. A value "
+                     "of False will ensure that the socket connection will "
+                     "be explicitly closed once a response has been sent to "
+                     "the client.")),
+    cfg.IntOpt('client_socket_timeout', default=900,
+               help=_("Timeout for client connections socket operations. "
+                    "If an incoming connection is idle for this number of "
+                    "seconds it will be closed. A value of '0' means "
+                    "wait forever.")),
 ]
 
 CONF = cfg.CONF
@@ -86,9 +99,10 @@ class WorkerService(object):
 
     def start(self):
         # We may have just forked from parent process.  A quick disposal of the
-        # existing sql connections avoids producting 500 errors later when they
+        # existing sql connections avoids producing 500 errors later when they
         # are discovered to be broken.
-        api.get_engine().pool.dispose()
+        if CONF.database.connection:
+            api.get_engine().pool.dispose()
         self._server = self._service.pool.spawn(self._service._run,
                                                 self._application,
                                                 self._service._socket)
@@ -106,12 +120,17 @@ class WorkerService(object):
 class Server(object):
     """Server class to manage multiple WSGI sockets and applications."""
 
-    def __init__(self, name, threads=1000):
+    def __init__(self, name, num_threads=1000):
         # Raise the default from 8192 to accommodate large tokens
         eventlet.wsgi.MAX_HEADER_LINE = CONF.max_header_line
-        self.pool = eventlet.GreenPool(threads)
+        self.num_threads = num_threads
+        # Pool for a greenthread in which wsgi server will be running
+        self.pool = eventlet.GreenPool(1)
         self.name = name
         self._server = None
+        # A value of 0 is converted to None because None is what causes the
+        # wsgi server to wait forever.
+        self.client_socket_timeout = CONF.client_socket_timeout or None
 
     def _get_socket(self, host, port, backlog):
         bind_addr = (host, port)
@@ -126,7 +145,7 @@ class Server(object):
             family = info[0]
             bind_addr = info[-1]
         except Exception:
-            LOG.exception(_("Unable to listen on %(host)s:%(port)s"),
+            LOG.exception(_LE("Unable to listen on %(host)s:%(port)s"),
                           {'host': host, 'port': port})
             sys.exit(1)
 
@@ -239,8 +258,11 @@ class Server(object):
 
     def _run(self, application, socket):
         """Start a WSGI server in a new green thread."""
-        eventlet.wsgi.server(socket, application, custom_pool=self.pool,
-                             log=logging.WritableLogger(LOG))
+        eventlet.wsgi.server(socket, application,
+                             max_size=self.num_threads,
+                             log=loggers.WritableLogger(LOG),
+                             keepalive=CONF.wsgi_keep_alive,
+                             socket_timeout=self.client_socket_timeout)
 
 
 class Middleware(object):
@@ -334,7 +356,7 @@ class Request(webob.Request):
     def get_content_type(self):
         allowed_types = ("application/json")
         if "Content-Type" not in self.headers:
-            LOG.debug(_("Missing Content-Type"))
+            LOG.debug("Missing Content-Type")
             return None
         _type = self.content_type
         if _type in allowed_types:
@@ -349,7 +371,7 @@ class Request(webob.Request):
         """
         if not self.accept_language:
             return None
-        all_languages = i18n.get_available_languages('neutron')
+        all_languages = oslo_i18n.get_available_languages('neutron')
         return self.accept_language.best_match(all_languages)
 
     @property
@@ -512,23 +534,23 @@ class RequestDeserializer(object):
         try:
             content_type = request.best_match_content_type()
         except exception.InvalidContentType:
-            LOG.debug(_("Unrecognized Content-Type provided in request"))
+            LOG.debug("Unrecognized Content-Type provided in request")
             return {}
 
         if content_type is None:
-            LOG.debug(_("No Content-Type provided in request"))
+            LOG.debug("No Content-Type provided in request")
             return {}
 
         if not len(request.body) > 0:
-            LOG.debug(_("Empty body provided in request"))
+            LOG.debug("Empty body provided in request")
             return {}
 
         try:
             deserializer = self.get_body_deserializer(content_type)
         except exception.InvalidContentType:
             with excutils.save_and_reraise_exception():
-                LOG.debug(_("Unable to deserialize body as provided "
-                            "Content-Type"))
+                LOG.debug("Unable to deserialize body as provided "
+                          "Content-Type")
 
         return deserializer.deserialize(request.body, action)
 
@@ -664,11 +686,6 @@ class Debug(Middleware):
 class Router(object):
     """WSGI middleware that maps incoming requests to WSGI apps."""
 
-    @classmethod
-    def factory(cls, global_config, **local_config):
-        """Return an instance of the WSGI Router class."""
-        return cls()
-
     def __init__(self, mapper):
         """Create a router for the given routes.Mapper.
 
@@ -717,7 +734,7 @@ class Router(object):
         if not match:
             language = req.best_match_language()
             msg = _('The resource could not be found.')
-            msg = i18n.translate(msg, language)
+            msg = oslo_i18n.translate(msg, language)
             return webob.exc.HTTPNotFound(explanation=msg)
         app = match['controller']
         return app
@@ -759,27 +776,27 @@ class Resource(Application):
     def __call__(self, request):
         """WSGI method that controls (de)serialization and method dispatch."""
 
-        LOG.info(_("%(method)s %(url)s"), {"method": request.method,
-                                           "url": request.url})
+        LOG.info(_LI("%(method)s %(url)s"),
+                 {"method": request.method, "url": request.url})
 
         try:
             action, args, accept = self.deserializer.deserialize(request)
         except exception.InvalidContentType:
             msg = _("Unsupported Content-Type")
-            LOG.exception(_("InvalidContentType: %s"), msg)
+            LOG.exception(_LE("InvalidContentType: %s"), msg)
             return Fault(webob.exc.HTTPBadRequest(explanation=msg))
         except exception.MalformedRequestBody:
             msg = _("Malformed request body")
-            LOG.exception(_("MalformedRequestBody: %s"), msg)
+            LOG.exception(_LE("MalformedRequestBody: %s"), msg)
             return Fault(webob.exc.HTTPBadRequest(explanation=msg))
 
         try:
             action_result = self.dispatch(request, action, args)
         except webob.exc.HTTPException as ex:
-            LOG.info(_("HTTP exception thrown: %s"), unicode(ex))
+            LOG.info(_LI("HTTP exception thrown: %s"), ex)
             action_result = Fault(ex, self._fault_body_function)
         except Exception:
-            LOG.exception(_("Internal error"))
+            LOG.exception(_LE("Internal error"))
             # Do not include the traceback to avoid returning it to clients.
             action_result = Fault(webob.exc.HTTPServerError(),
                                   self._fault_body_function)
@@ -792,13 +809,11 @@ class Resource(Application):
             response = action_result
 
         try:
-            msg_dict = dict(url=request.url, status=response.status_int)
-            msg = _("%(url)s returned with HTTP %(status)d") % msg_dict
+            LOG.info(_LI("%(url)s returned with HTTP %(status)d"),
+                     dict(url=request.url, status=response.status_int))
         except AttributeError as e:
-            msg_dict = dict(url=request.url, exception=e)
-            msg = _("%(url)s returned a fault: %(exception)s") % msg_dict
-
-        LOG.info(msg)
+            LOG.info(_LI("%(url)s returned a fault: %(exception)s"),
+                     dict(url=request.url, exception=e))
 
         return response
 
@@ -889,9 +904,8 @@ class Controller(object):
             response = webob.Response(status=status,
                                       content_type=content_type,
                                       body=body)
-            msg_dict = dict(url=req.url, status=response.status_int)
-            msg = _("%(url)s returned with HTTP %(status)d") % msg_dict
-            LOG.debug(msg)
+            LOG.debug("%(url)s returned with HTTP %(status)d",
+                      dict(url=req.url, status=response.status_int))
             return response
         else:
             return result

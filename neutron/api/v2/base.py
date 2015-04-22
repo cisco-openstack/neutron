@@ -14,11 +14,12 @@
 #    under the License.
 
 import copy
-import netaddr
-import webob.exc
 
-from oslo.config import cfg
-from oslo.utils import excutils
+import netaddr
+from oslo_config import cfg
+from oslo_log import log as logging
+from oslo_utils import excutils
+import webob.exc
 
 from neutron.api import api_common
 from neutron.api.rpc.agentnotifiers import dhcp_rpc_agent_api
@@ -28,7 +29,6 @@ from neutron.common import constants as const
 from neutron.common import exceptions
 from neutron.common import rpc as n_rpc
 from neutron.i18n import _LE, _LI
-from neutron.openstack.common import log as logging
 from neutron.openstack.common import policy as common_policy
 from neutron import policy
 from neutron import quota
@@ -144,7 +144,8 @@ class Controller(object):
                     context,
                     '%s:%s' % (self._plugin_handlers[self.SHOW], attr_name),
                     data,
-                    might_not_exist=True):
+                    might_not_exist=True,
+                    pluralized=self._collection):
                     # this attribute is visible, check next one
                     continue
             # if the code reaches this point then either the policy check
@@ -199,7 +200,10 @@ class Controller(object):
                     arg_list.append(body)
                 # It is ok to raise a 403 because accessibility to the
                 # object was checked earlier in this method
-                policy.enforce(request.context, name, resource)
+                policy.enforce(request.context,
+                               name,
+                               resource,
+                               pluralized=self._collection)
                 return getattr(self._plugin, name)(*arg_list, **kwargs)
             return _handle_action
         else:
@@ -254,7 +258,8 @@ class Controller(object):
                         if policy.check(request.context,
                                         self._plugin_handlers[self.SHOW],
                                         obj,
-                                        plugin=self._plugin)]
+                                        plugin=self._plugin,
+                                        pluralized=self._collection)]
         # Use the first element in the list for discriminating which attributes
         # should be filtered out because of authZ policies
         # fields_to_add contains a list of attributes added for request policy
@@ -287,7 +292,10 @@ class Controller(object):
         # FIXME(salvatore-orlando): obj_getter might return references to
         # other resources. Must check authZ on them too.
         if do_authz:
-            policy.enforce(request.context, action, obj)
+            policy.enforce(request.context,
+                           action,
+                           obj,
+                           pluralized=self._collection)
         return obj
 
     def _send_dhcp_notification(self, context, data, methodname):
@@ -351,25 +359,26 @@ class Controller(object):
             return objs
         # Note(salvatore-orlando): broad catch as in theory a plugin
         # could raise any kind of exception
-        except Exception as ex:
-            for obj in objs:
-                obj_deleter = getattr(self._plugin,
-                                      self._plugin_handlers[self.DELETE])
-                try:
-                    kwargs = ({self._parent_id_name: parent_id} if parent_id
-                              else {})
-                    obj_deleter(request.context, obj['id'], **kwargs)
-                except Exception:
-                    # broad catch as our only purpose is to log the exception
-                    LOG.exception(_LE("Unable to undo add for "
-                                      "%(resource)s %(id)s"),
-                                  {'resource': self._resource,
-                                   'id': obj['id']})
-            # TODO(salvatore-orlando): The object being processed when the
-            # plugin raised might have been created or not in the db.
-            # We need a way for ensuring that if it has been created,
-            # it is then deleted
-            raise ex
+        except Exception:
+            with excutils.save_and_reraise_exception():
+                for obj in objs:
+                    obj_deleter = getattr(self._plugin,
+                                          self._plugin_handlers[self.DELETE])
+                    try:
+                        kwargs = ({self._parent_id_name: parent_id}
+                                  if parent_id else {})
+                        obj_deleter(request.context, obj['id'], **kwargs)
+                    except Exception:
+                        # broad catch as our only purpose is to log the
+                        # exception
+                        LOG.exception(_LE("Unable to undo add for "
+                                          "%(resource)s %(id)s"),
+                                      {'resource': self._resource,
+                                       'id': obj['id']})
+                # TODO(salvatore-orlando): The object being processed when the
+                # plugin raised might have been created or not in the db.
+                # We need a way for ensuring that if it has been created,
+                # it is then deleted
 
     def create(self, request, body=None, **kwargs):
         """Creates a new instance of the requested entity."""
@@ -397,7 +406,8 @@ class Controller(object):
                                                     item[self._resource])
             policy.enforce(request.context,
                            action,
-                           item[self._resource])
+                           item[self._resource],
+                           pluralized=self._collection)
             try:
                 tenant_id = item[self._resource]['tenant_id']
                 count = quota.QUOTAS.count(request.context, self._resource,
@@ -468,7 +478,8 @@ class Controller(object):
         try:
             policy.enforce(request.context,
                            action,
-                           obj)
+                           obj,
+                           pluralized=self._collection)
         except common_policy.PolicyNotAuthorized:
             # To avoid giving away information, pretend that it
             # doesn't exist
@@ -523,7 +534,8 @@ class Controller(object):
         try:
             policy.enforce(request.context,
                            action,
-                           orig_obj)
+                           orig_obj,
+                           pluralized=self._collection)
         except common_policy.PolicyNotAuthorized:
             with excutils.save_and_reraise_exception() as ctxt:
                 # If a tenant is modifying it's own object, it's safe to return

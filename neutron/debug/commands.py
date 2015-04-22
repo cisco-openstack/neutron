@@ -17,9 +17,9 @@ from cliff import lister
 from neutronclient.common import utils
 from neutronclient.neutron import v2_0 as client
 from neutronclient.neutron.v2_0 import port
+from oslo_log import log as logging
 
 from neutron.i18n import _LI
-from neutron.openstack.common import log as logging
 
 
 class ProbeCommand(client.NeutronCommand):
@@ -50,7 +50,7 @@ class CreateProbe(ProbeCommand):
         return parser
 
     def run(self, parsed_args):
-        self.log.debug('run(%s)' % parsed_args)
+        self.log.debug('run(%s)', parsed_args)
         debug_agent = self.get_debug_agent()
         probe_port = debug_agent.create_probe(parsed_args.id,
                                               parsed_args.device_owner)
@@ -70,7 +70,7 @@ class DeleteProbe(ProbeCommand):
         return parser
 
     def run(self, parsed_args):
-        self.log.debug('run(%s)' % parsed_args)
+        self.log.debug('run(%s)', parsed_args)
         debug_agent = self.get_debug_agent()
         debug_agent.delete_probe(parsed_args.id)
         self.log.info(_('Probe %s deleted'), parsed_args.id)
@@ -101,10 +101,10 @@ class ClearProbe(ProbeCommand):
     log = logging.getLogger(__name__ + '.ClearProbe')
 
     def run(self, parsed_args):
-        self.log.debug('run(%s)' % parsed_args)
+        self.log.debug('run(%s)', parsed_args)
         debug_agent = self.get_debug_agent()
         cleared_probes_count = debug_agent.clear_probes()
-        self.log.info(_LI('%d probe(s) deleted') % cleared_probes_count)
+        self.log.info(_LI('%d probe(s) deleted'), cleared_probes_count)
 
 
 class ExecProbe(ProbeCommand):
@@ -125,7 +125,7 @@ class ExecProbe(ProbeCommand):
         return parser
 
     def run(self, parsed_args):
-        self.log.debug('run(%s)' % parsed_args)
+        self.log.debug('run(%s)', parsed_args)
         debug_agent = self.get_debug_agent()
         result = debug_agent.exec_command(parsed_args.id, parsed_args.command)
         self.app.stdout.write(result + '\n')
@@ -149,7 +149,7 @@ class PingAll(ProbeCommand):
         return parser
 
     def run(self, parsed_args):
-        self.log.debug('run(%s)' % parsed_args)
+        self.log.debug('run(%s)', parsed_args)
         debug_agent = self.get_debug_agent()
         result = debug_agent.ping_all(parsed_args.id,
                                       timeout=parsed_args.timeout)

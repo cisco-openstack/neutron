@@ -21,16 +21,22 @@ from neutron.common import exceptions as n_exc
 NETWORK_TYPE = 'provider:network_type'
 PHYSICAL_NETWORK = 'provider:physical_network'
 SEGMENTATION_ID = 'provider:segmentation_id'
+ATTRIBUTES = (NETWORK_TYPE, PHYSICAL_NETWORK, SEGMENTATION_ID)
+
+# Common definitions for maximum string field length
+NETWORK_TYPE_MAX_LEN = 32
+PHYSICAL_NETWORK_MAX_LEN = 64
 
 EXTENDED_ATTRIBUTES_2_0 = {
     'networks': {
         NETWORK_TYPE: {'allow_post': True, 'allow_put': True,
-                       'validate': {'type:string': None},
+                       'validate': {'type:string': NETWORK_TYPE_MAX_LEN},
                        'default': attributes.ATTR_NOT_SPECIFIED,
                        'enforce_policy': True,
                        'is_visible': True},
         PHYSICAL_NETWORK: {'allow_post': True, 'allow_put': True,
-                           'validate': {'type:string': None},
+                           'validate': {'type:string':
+                                        PHYSICAL_NETWORK_MAX_LEN},
                            'default': attributes.ATTR_NOT_SPECIFIED,
                            'enforce_policy': True,
                            'is_visible': True},
@@ -49,8 +55,7 @@ def _raise_if_updates_provider_attributes(attrs):
     This method is used for plugins that do not support
     updating provider networks.
     """
-    immutable = (NETWORK_TYPE, PHYSICAL_NETWORK, SEGMENTATION_ID)
-    if any(attributes.is_attr_set(attrs.get(a)) for a in immutable):
+    if any(attributes.is_attr_set(attrs.get(a)) for a in ATTRIBUTES):
         msg = _("Plugin does not support updating provider attributes")
         raise n_exc.InvalidInput(error_message=msg)
 

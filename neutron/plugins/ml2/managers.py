@@ -13,7 +13,8 @@
 #    License for the specific language governing permissions and limitations
 #    under the License.
 
-from oslo.config import cfg
+from oslo_config import cfg
+from oslo_log import log
 import stevedore
 
 from neutron.api.v2 import attributes
@@ -21,8 +22,8 @@ from neutron.common import exceptions as exc
 from neutron.extensions import multiprovidernet as mpnet
 from neutron.extensions import portbindings
 from neutron.extensions import providernet as provider
-from neutron.i18n import _LE, _LI, _LW
-from neutron.openstack.common import log
+from neutron.extensions import vlantransparent
+from neutron.i18n import _LE, _LI
 from neutron.plugins.ml2.common import exceptions as ml2_exc
 from neutron.plugins.ml2 import db
 from neutron.plugins.ml2 import driver_api as api
@@ -75,11 +76,9 @@ class TypeManager(stevedore.named.NamedExtensionManager):
         LOG.info(_LI("Tenant network_types: %s"), self.tenant_network_types)
 
     def _process_provider_segment(self, segment):
-        network_type = self._get_attribute(segment, provider.NETWORK_TYPE)
-        physical_network = self._get_attribute(segment,
-                                               provider.PHYSICAL_NETWORK)
-        segmentation_id = self._get_attribute(segment,
-                                              provider.SEGMENTATION_ID)
+        (network_type, physical_network,
+         segmentation_id) = (self._get_attribute(segment, attr)
+                             for attr in provider.ATTRIBUTES)
 
         if attributes.is_attr_set(network_type):
             segment = {api.NETWORK_TYPE: network_type,
@@ -92,23 +91,14 @@ class TypeManager(stevedore.named.NamedExtensionManager):
         raise exc.InvalidInput(error_message=msg)
 
     def _process_provider_create(self, network):
-        if any(attributes.is_attr_set(network.get(f))
-               for f in (provider.NETWORK_TYPE, provider.PHYSICAL_NETWORK,
-                         provider.SEGMENTATION_ID)):
+        if any(attributes.is_attr_set(network.get(attr))
+               for attr in provider.ATTRIBUTES):
             # Verify that multiprovider and provider attributes are not set
             # at the same time.
             if attributes.is_attr_set(network.get(mpnet.SEGMENTS)):
                 raise mpnet.SegmentsSetInConjunctionWithProviders()
-
-            network_type = self._get_attribute(network, provider.NETWORK_TYPE)
-            physical_network = self._get_attribute(network,
-                                                   provider.PHYSICAL_NETWORK)
-            segmentation_id = self._get_attribute(network,
-                                                  provider.SEGMENTATION_ID)
-            segments = [{provider.NETWORK_TYPE: network_type,
-                         provider.PHYSICAL_NETWORK: physical_network,
-                         provider.SEGMENTATION_ID: segmentation_id}]
-            return [self._process_provider_segment(s) for s in segments]
+            segment = self._get_provider_segment(network)
+            return [self._process_provider_segment(segment)]
         elif attributes.is_attr_set(network.get(mpnet.SEGMENTS)):
             segments = [self._process_provider_segment(s)
                         for s in network[mpnet.SEGMENTS]]
@@ -117,20 +107,44 @@ class TypeManager(stevedore.named.NamedExtensionManager):
                 self.is_partial_segment)
             return segments
 
+    def _match_segment(self, segment, filters):
+        return all(not filters.get(attr) or segment.get(attr) in filters[attr]
+                   for attr in provider.ATTRIBUTES)
+
+    def _get_provider_segment(self, network):
+        # TODO(manishg): Placeholder method
+        # Code intended for operating on a provider segment should use
+        # this method to extract the segment, even though currently the
+        # segment attributes are part of the network dictionary. In the
+        # future, network and segment information will be decoupled and
+        # here we will do the job of extracting the segment information.
+        return network
+
+    def network_matches_filters(self, network, filters):
+        if not filters:
+            return True
+        if any(attributes.is_attr_set(network.get(attr))
+               for attr in provider.ATTRIBUTES):
+            segments = [self._get_provider_segment(network)]
+        elif attributes.is_attr_set(network.get(mpnet.SEGMENTS)):
+            segments = self._get_attribute(network, mpnet.SEGMENTS)
+        else:
+            return True
+        return any(self._match_segment(s, filters) for s in segments)
+
     def _get_attribute(self, attrs, key):
         value = attrs.get(key)
         if value is attributes.ATTR_NOT_SPECIFIED:
             value = None
         return value
 
-    def _extend_network_dict_provider(self, context, network):
+    def extend_network_dict_provider(self, context, network):
         id = network['id']
         segments = db.get_network_segments(context.session, id)
         if not segments:
             LOG.error(_LE("Network %s has no segments"), id)
-            network[provider.NETWORK_TYPE] = None
-            network[provider.PHYSICAL_NETWORK] = None
-            network[provider.SEGMENTATION_ID] = None
+            for attr in provider.ATTRIBUTES:
+                network[attr] = None
         elif len(segments) > 1:
             network[mpnet.SEGMENTS] = [
                 {provider.NETWORK_TYPE: segment[api.NETWORK_TYPE],
@@ -154,6 +168,7 @@ class TypeManager(stevedore.named.NamedExtensionManager):
         """Call type drivers to create network segments."""
         segments = self._process_provider_create(network)
         session = context.session
+        mtu = []
         with session.begin(subtransactions=True):
             network_id = network['id']
             if segments:
@@ -163,9 +178,14 @@ class TypeManager(stevedore.named.NamedExtensionManager):
                     db.add_network_segment(session, network_id,
                                            segment, segment_index,
                                            provider_segment=True)
+                    if segment.get(api.MTU) > 0:
+                        mtu.append(segment[api.MTU])
             else:
                 segment = self.allocate_tenant_segment(session)
                 db.add_network_segment(session, network_id, segment)
+                if segment.get(api.MTU) > 0:
+                    mtu.append(segment[api.MTU])
+        network[api.MTU] = min(mtu) if mtu else 0
 
     def is_partial_segment(self, segment):
         network_type = segment[api.NETWORK_TYPE]
@@ -273,13 +293,25 @@ class MechanismManager(stevedore.named.NamedExtensionManager):
                  [driver.name for driver in self.ordered_mech_drivers])
 
     def initialize(self):
-        # For ML2 to support bulk operations, each driver must support them
-        self.native_bulk_support = True
         for driver in self.ordered_mech_drivers:
             LOG.info(_LI("Initializing mechanism driver '%s'"), driver.name)
             driver.obj.initialize()
-            self.native_bulk_support &= getattr(driver.obj,
-                                                'native_bulk_support', True)
+
+    def _check_vlan_transparency(self, context):
+        """Helper method for checking vlan transparecncy support.
+
+        :param context: context parameter to pass to each method call
+        :raises: neutron.extensions.vlantransparent.
+        VlanTransparencyDriverError if any mechanism driver doesn't
+        support vlan transparency.
+        """
+        if context.current['vlan_transparent'] is None:
+            return
+
+        if context.current['vlan_transparent']:
+            for driver in self.ordered_mech_drivers:
+                if not driver.obj.check_vlan_transparency(context):
+                    raise vlantransparent.VlanTransparencyDriverError()
 
     def _call_on_drivers(self, method_name, context,
                          continue_on_failure=False):
@@ -320,6 +352,7 @@ class MechanismManager(stevedore.named.NamedExtensionManager):
         to the caller, triggering a rollback. There is no guarantee
         that all mechanism drivers are called in this case.
         """
+        self._check_vlan_transparency(context)
         self._call_on_drivers("create_network_precommit", context)
 
     def create_network_postcommit(self, context):
@@ -579,13 +612,13 @@ class MechanismManager(stevedore.named.NamedExtensionManager):
                    'host': context.host,
                    'vnic_type': binding.vnic_type,
                    'profile': binding.profile})
-        context.clear_binding_levels()
+        context._clear_binding_levels()
         if not self._bind_port_level(context, 0,
                                      context.network.network_segments):
             binding.vif_type = portbindings.VIF_TYPE_BINDING_FAILED
-            LOG.warning(_LW("Failed to bind port %(port)s on host %(host)s"),
-                        {'port': context.current['id'],
-                         'host': context.host})
+            LOG.error(_LE("Failed to bind port %(port)s on host %(host)s"),
+                      {'port': context.current['id'],
+                       'host': context.host})
 
     def _bind_port_level(self, context, level, segments_to_bind):
         binding = context._binding
@@ -609,11 +642,11 @@ class MechanismManager(stevedore.named.NamedExtensionManager):
                                               context._binding_levels):
                 continue
             try:
-                context.prepare_to_bind(segments_to_bind)
+                context._prepare_to_bind(segments_to_bind)
                 driver.obj.bind_port(context)
                 segment = context._new_bound_segment
                 if segment:
-                    context.push_binding_level(
+                    context._push_binding_level(
                         models.PortBindingLevel(port_id=port_id,
                                                 host=context.host,
                                                 level=level,
@@ -626,7 +659,7 @@ class MechanismManager(stevedore.named.NamedExtensionManager):
                                                  next_segments):
                             return True
                         else:
-                            context.pop_binding_level()
+                            context._pop_binding_level()
                     else:
                         # Binding complete.
                         LOG.debug("Bound port: %(port)s, "
@@ -697,62 +730,64 @@ class ExtensionManager(stevedore.named.NamedExtensionManager):
                      {'alias': alias, 'drv': driver.name})
         return exts
 
-    def _call_on_ext_drivers(self, method_name, session, data, result):
+    def _call_on_ext_drivers(self, method_name, plugin_context, data, result):
         """Helper method for calling a method across all extension drivers."""
         for driver in self.ordered_ext_drivers:
             try:
-                getattr(driver.obj, method_name)(session, data, result)
+                getattr(driver.obj, method_name)(plugin_context, data, result)
             except Exception:
                 LOG.exception(
                     _LE("Extension driver '%(name)s' failed in %(method)s"),
                     {'name': driver.name, 'method': method_name}
                 )
 
-    def process_create_network(self, session, data, result):
+    def process_create_network(self, plugin_context, data, result):
         """Notify all extension drivers during network creation."""
-        self._call_on_ext_drivers("process_create_network", session, data,
-                                  result)
+        self._call_on_ext_drivers("process_create_network", plugin_context,
+                                  data, result)
 
-    def process_update_network(self, session, data, result):
+    def process_update_network(self, plugin_context, data, result):
         """Notify all extension drivers during network update."""
-        self._call_on_ext_drivers("process_update_network", session, data,
-                                  result)
+        self._call_on_ext_drivers("process_update_network", plugin_context,
+                                  data, result)
 
-    def process_create_subnet(self, session, data, result):
+    def process_create_subnet(self, plugin_context, data, result):
         """Notify all extension drivers during subnet creation."""
-        self._call_on_ext_drivers("process_create_subnet", session, data,
-                                  result)
+        self._call_on_ext_drivers("process_create_subnet", plugin_context,
+                                  data, result)
 
-    def process_update_subnet(self, session, data, result):
+    def process_update_subnet(self, plugin_context, data, result):
         """Notify all extension drivers during subnet update."""
-        self._call_on_ext_drivers("process_update_subnet", session, data,
-                                  result)
+        self._call_on_ext_drivers("process_update_subnet", plugin_context,
+                                  data, result)
 
-    def process_create_port(self, session, data, result):
+    def process_create_port(self, plugin_context, data, result):
         """Notify all extension drivers during port creation."""
-        self._call_on_ext_drivers("process_create_port", session, data, result)
+        self._call_on_ext_drivers("process_create_port", plugin_context,
+                                  data, result)
 
-    def process_update_port(self, session, data, result):
+    def process_update_port(self, plugin_context, data, result):
         """Notify all extension drivers during port update."""
-        self._call_on_ext_drivers("process_update_port", session, data, result)
+        self._call_on_ext_drivers("process_update_port", plugin_context,
+                                  data, result)
 
-    def extend_network_dict(self, session, result):
+    def extend_network_dict(self, session, base_model, result):
         """Notify all extension drivers to extend network dictionary."""
         for driver in self.ordered_ext_drivers:
-            driver.obj.extend_network_dict(session, result)
+            driver.obj.extend_network_dict(session, base_model, result)
             LOG.info(_LI("Extended network dict for driver '%(drv)s'"),
                      {'drv': driver.name})
 
-    def extend_subnet_dict(self, session, result):
+    def extend_subnet_dict(self, session, base_model, result):
         """Notify all extension drivers to extend subnet dictionary."""
         for driver in self.ordered_ext_drivers:
-            driver.obj.extend_subnet_dict(session, result)
+            driver.obj.extend_subnet_dict(session, base_model, result)
             LOG.info(_LI("Extended subnet dict for driver '%(drv)s'"),
                      {'drv': driver.name})
 
-    def extend_port_dict(self, session, result):
+    def extend_port_dict(self, session, base_model, result):
         """Notify all extension drivers to extend port dictionary."""
         for driver in self.ordered_ext_drivers:
-            driver.obj.extend_port_dict(session, result)
+            driver.obj.extend_port_dict(session, base_model, result)
             LOG.info(_LI("Extended port dict for driver '%(drv)s'"),
                      {'drv': driver.name})

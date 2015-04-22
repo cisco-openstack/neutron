@@ -12,7 +12,7 @@
 #    License for the specific language governing permissions and limitations
 #    under the License.
 
-from oslo.config import cfg
+from oslo_config import cfg
 
 from neutron.agent.common import config
 from neutron.plugins.common import constants as p_const
@@ -27,8 +27,6 @@ DEFAULT_TUNNEL_TYPES = []
 ovs_opts = [
     cfg.StrOpt('integration_bridge', default='br-int',
                help=_("Integration bridge to use.")),
-    cfg.BoolOpt('enable_tunneling', default=False,
-                help=_("Enable tunneling support.")),
     cfg.StrOpt('tunnel_bridge', default='br-tun',
                help=_("Tunnel bridge to use.")),
     cfg.StrOpt('int_peer_patch_port', default='patch-tun',
@@ -76,15 +74,29 @@ agent_opts = [
                        "Allows the switch (when supporting an overlay) "
                        "to respond to an ARP request locally without "
                        "performing a costly ARP broadcast into the overlay.")),
+    cfg.BoolOpt('prevent_arp_spoofing', default=False,
+                help=_("Enable suppression of ARP responses that don't match "
+                       "an IP address that belongs to the port from which "
+                       "they originate. Note: This prevents the VMs attached "
+                       "to this agent from spoofing, it doesn't protect them "
+                       "from other devices which have the capability to spoof "
+                       "(e.g. bare metal or VMs attached to agents without "
+                       "this flag set to True). Spoofing rules will not be "
+                       "added to any ports that have port security disabled. "
+                       "This requires a version of OVS that supports matching "
+                       "ARP headers.")),
     cfg.BoolOpt('dont_fragment', default=True,
                 help=_("Set or un-set the don't fragment (DF) bit on "
                        "outgoing IP packet carrying GRE/VXLAN tunnel.")),
     cfg.BoolOpt('enable_distributed_routing', default=False,
                 help=_("Make the l2 agent run in DVR mode.")),
+    cfg.IntOpt('quitting_rpc_timeout', default=10,
+               help=_("Set new timeout in seconds for new rpc calls after "
+                      "agent receives SIGTERM. If value is set to 0, rpc "
+                      "timeout won't be changed"))
 ]
 
 
 cfg.CONF.register_opts(ovs_opts, "OVS")
 cfg.CONF.register_opts(agent_opts, "AGENT")
 config.register_agent_state_opts_helper(cfg.CONF)
-config.register_root_helper(cfg.CONF)

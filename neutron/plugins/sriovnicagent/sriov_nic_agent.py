@@ -21,17 +21,18 @@ import time
 import eventlet
 eventlet.monkey_patch()
 
-from oslo.config import cfg
+from oslo_config import cfg
+from oslo_log import log as logging
+import oslo_messaging
 
 from neutron.agent import rpc as agent_rpc
 from neutron.agent import securitygroups_rpc as sg_rpc
 from neutron.common import config as common_config
 from neutron.common import constants as q_constants
-from neutron.common import rpc as n_rpc
 from neutron.common import topics
 from neutron.common import utils as q_utils
 from neutron import context
-from neutron.openstack.common import log as logging
+from neutron.i18n import _LE, _LI
 from neutron.openstack.common import loopingcall
 from neutron.plugins.sriovnicagent.common import config  # noqa
 from neutron.plugins.sriovnicagent.common import exceptions as exc
@@ -41,19 +42,18 @@ from neutron.plugins.sriovnicagent import eswitch_manager as esm
 LOG = logging.getLogger(__name__)
 
 
-class SriovNicSwitchRpcCallbacks(n_rpc.RpcCallback,
-                                 sg_rpc.SecurityGroupAgentRpcCallbackMixin):
+class SriovNicSwitchRpcCallbacks(sg_rpc.SecurityGroupAgentRpcCallbackMixin):
 
     # Set RPC API version to 1.0 by default.
     # history
     #   1.1 Support Security Group RPC
-    RPC_API_VERSION = '1.1'
+    target = oslo_messaging.Target(version='1.1')
 
-    def __init__(self, context, agent):
+    def __init__(self, context, agent, sg_agent):
         super(SriovNicSwitchRpcCallbacks, self).__init__()
         self.context = context
         self.agent = agent
-        self.sg_agent = agent
+        self.sg_agent = sg_agent
 
     def port_update(self, context, **kwargs):
         LOG.debug("port_update received")
@@ -63,20 +63,14 @@ class SriovNicSwitchRpcCallbacks(n_rpc.RpcCallback,
         # notifications there is no guarantee the notifications are
         # processed in the same order as the relevant API requests.
         self.agent.updated_devices.add(port['mac_address'])
-        LOG.debug(_("port_update RPC received for port: %s"), port['id'])
+        LOG.debug("port_update RPC received for port: %s", port['id'])
 
 
-class SriovNicSwitchPluginApi(agent_rpc.PluginApi,
-                              sg_rpc.SecurityGroupServerRpcApiMixin):
-    pass
-
-
-class SriovNicSwitchAgent(sg_rpc.SecurityGroupAgentRpcMixin):
+class SriovNicSwitchAgent(object):
     def __init__(self, physical_devices_mappings, exclude_devices,
-                 polling_interval, root_helper):
+                 polling_interval):
 
         self.polling_interval = polling_interval
-        self.root_helper = root_helper
         self.setup_eswitch_mgr(physical_devices_mappings,
                                exclude_devices)
         configurations = {'device_mappings': physical_devices_mappings}
@@ -90,22 +84,26 @@ class SriovNicSwitchAgent(sg_rpc.SecurityGroupAgentRpcMixin):
 
         # Stores port update notifications for processing in the main loop
         self.updated_devices = set()
+
+        self.context = context.get_admin_context_without_session()
+        self.plugin_rpc = agent_rpc.PluginApi(topics.PLUGIN)
+        self.sg_plugin_rpc = sg_rpc.SecurityGroupServerRpcApi(topics.PLUGIN)
+        self.sg_agent = sg_rpc.SecurityGroupAgentRpc(self.context,
+                self.sg_plugin_rpc)
         self._setup_rpc()
-        self.init_firewall()
         # Initialize iteration counter
         self.iter_num = 0
 
     def _setup_rpc(self):
         self.agent_id = 'nic-switch-agent.%s' % socket.gethostname()
-        LOG.info(_("RPC agent_id: %s"), self.agent_id)
+        LOG.info(_LI("RPC agent_id: %s"), self.agent_id)
 
         self.topic = topics.AGENT
-        self.plugin_rpc = SriovNicSwitchPluginApi(topics.PLUGIN)
         self.state_rpc = agent_rpc.PluginReportStateAPI(topics.PLUGIN)
         # RPC network init
-        self.context = context.get_admin_context_without_session()
         # Handle updates from service
-        self.endpoints = [SriovNicSwitchRpcCallbacks(self.context, self)]
+        self.endpoints = [SriovNicSwitchRpcCallbacks(self.context, self,
+                                                     self.sg_agent)]
         # Define the listening consumers for the agent
         consumers = [[topics.PORT, topics.UPDATE],
                      [topics.NETWORK, topics.DELETE],
@@ -128,12 +126,10 @@ class SriovNicSwitchAgent(sg_rpc.SecurityGroupAgentRpcMixin):
                                         self.agent_state)
             self.agent_state.pop('start_flag', None)
         except Exception:
-            LOG.exception(_("Failed reporting state!"))
+            LOG.exception(_LE("Failed reporting state!"))
 
     def setup_eswitch_mgr(self, device_mappings, exclude_devices={}):
-        self.eswitch_mgr = esm.ESwitchManager(device_mappings,
-                                              exclude_devices,
-                                              self.root_helper)
+        self.eswitch_mgr = esm.ESwitchManager(device_mappings, exclude_devices)
 
     def scan_devices(self, registered_devices, updated_devices):
         curr_devices = self.eswitch_mgr.get_assigned_devices()
@@ -155,10 +151,10 @@ class SriovNicSwitchAgent(sg_rpc.SecurityGroupAgentRpcMixin):
         resync_a = False
         resync_b = False
 
-        self.prepare_devices_filter(device_info.get('added'))
+        self.sg_agent.prepare_devices_filter(device_info.get('added'))
 
         if device_info.get('updated'):
-            self.refresh_firewall()
+            self.sg_agent.refresh_firewall()
         # Updated devices are processed the same as new ones, as their
         # admin_state_up may have changed. The set union prevents duplicating
         # work when a device is new and updated in the same polling iteration.
@@ -178,7 +174,7 @@ class SriovNicSwitchAgent(sg_rpc.SecurityGroupAgentRpcMixin):
                 self.eswitch_mgr.set_device_state(device, pci_slot,
                                                   admin_state_up)
             except exc.SriovNicError:
-                LOG.exception(_("Failed to set device %s state"), device)
+                LOG.exception(_LE("Failed to set device %s state"), device)
                 return
             if admin_state_up:
                 # update plugin about port status
@@ -192,7 +188,7 @@ class SriovNicSwitchAgent(sg_rpc.SecurityGroupAgentRpcMixin):
                                                    self.agent_id,
                                                    cfg.CONF.host)
         else:
-            LOG.info(_("No device with MAC %s defined on agent."), device)
+            LOG.info(_LI("No device with MAC %s defined on agent."), device)
 
     def treat_devices_added_updated(self, devices):
         try:
@@ -210,48 +206,49 @@ class SriovNicSwitchAgent(sg_rpc.SecurityGroupAgentRpcMixin):
             LOG.debug("Port with MAC address %s is added", device)
 
             if 'port_id' in device_details:
-                LOG.info(_("Port %(device)s updated. Details: %(details)s"),
+                LOG.info(_LI("Port %(device)s updated. Details: %(details)s"),
                          {'device': device, 'details': device_details})
                 profile = device_details['profile']
                 self.treat_device(device_details['device'],
                                   profile.get('pci_slot'),
                                   device_details['admin_state_up'])
             else:
-                LOG.info(_("Device with MAC %s not defined on plugin"), device)
+                LOG.info(_LI("Device with MAC %s not defined on plugin"),
+                         device)
         return False
 
     def treat_devices_removed(self, devices):
         resync = False
         for device in devices:
-            LOG.info(_("Removing device with mac_address %s"), device)
+            LOG.info(_LI("Removing device with mac_address %s"), device)
             try:
                 dev_details = self.plugin_rpc.update_device_down(self.context,
                                                                  device,
                                                                  self.agent_id,
                                                                  cfg.CONF.host)
             except Exception as e:
-                LOG.debug(_("Removing port failed for device %(device)s "
-                          "due to %(exc)s"), {'device': device, 'exc': e})
+                LOG.debug("Removing port failed for device %(device)s "
+                          "due to %(exc)s", {'device': device, 'exc': e})
                 resync = True
                 continue
             if dev_details['exists']:
-                LOG.info(_("Port %s updated."), device)
+                LOG.info(_LI("Port %s updated."), device)
             else:
-                LOG.debug(_("Device %s not defined on plugin"), device)
+                LOG.debug("Device %s not defined on plugin", device)
         return resync
 
     def daemon_loop(self):
         sync = True
         devices = set()
 
-        LOG.info(_("SRIOV NIC Agent RPC Daemon Started!"))
+        LOG.info(_LI("SRIOV NIC Agent RPC Daemon Started!"))
 
         while True:
             start = time.time()
             LOG.debug("Agent rpc_loop - iteration:%d started",
                       self.iter_num)
             if sync:
-                LOG.info(_("Agent out of sync with plugin!"))
+                LOG.info(_LI("Agent out of sync with plugin!"))
                 devices.clear()
                 sync = False
             device_info = {}
@@ -264,13 +261,13 @@ class SriovNicSwitchAgent(sg_rpc.SecurityGroupAgentRpcMixin):
             try:
                 device_info = self.scan_devices(devices, updated_devices_copy)
                 if self._device_info_has_changes(device_info):
-                    LOG.debug(_("Agent loop found changes! %s"), device_info)
+                    LOG.debug("Agent loop found changes! %s", device_info)
                     # If treat devices fails - indicates must resync with
                     # plugin
                     sync = self.process_network_devices(device_info)
                     devices = device_info['current']
             except Exception:
-                LOG.exception(_("Error in agent loop. Devices info: %s"),
+                LOG.exception(_LE("Error in agent loop. Devices info: %s"),
                               device_info)
                 sync = True
                 # Restore devices that were removed from this set earlier
@@ -282,8 +279,8 @@ class SriovNicSwitchAgent(sg_rpc.SecurityGroupAgentRpcMixin):
             if (elapsed < self.polling_interval):
                 time.sleep(self.polling_interval - elapsed)
             else:
-                LOG.debug(_("Loop iteration exceeded interval "
-                            "(%(polling_interval)s vs. %(elapsed)s)!"),
+                LOG.debug("Loop iteration exceeded interval "
+                          "(%(polling_interval)s vs. %(elapsed)s)!",
                           {'polling_interval': self.polling_interval,
                            'elapsed': elapsed})
             self.iter_num = self.iter_num + 1
@@ -329,25 +326,23 @@ def main():
         device_mappings = config_parser.device_mappings
         exclude_devices = config_parser.exclude_devices
 
-    except ValueError as e:
-        LOG.error(_("Failed on Agent configuration parse : %s."
-                    " Agent terminated!"), e)
+    except ValueError:
+        LOG.exception(_LE("Failed on Agent configuration parse. "
+                          "Agent terminated!"))
         raise SystemExit(1)
-    LOG.info(_("Physical Devices mappings: %s"), device_mappings)
-    LOG.info(_("Exclude Devices: %s"), exclude_devices)
+    LOG.info(_LI("Physical Devices mappings: %s"), device_mappings)
+    LOG.info(_LI("Exclude Devices: %s"), exclude_devices)
 
     polling_interval = cfg.CONF.AGENT.polling_interval
-    root_helper = cfg.CONF.AGENT.root_helper
     try:
         agent = SriovNicSwitchAgent(device_mappings,
                                     exclude_devices,
-                                    polling_interval,
-                                    root_helper)
+                                    polling_interval)
     except exc.SriovNicError:
-        LOG.exception(_("Agent Initialization Failed"))
+        LOG.exception(_LE("Agent Initialization Failed"))
         raise SystemExit(1)
     # Start everything.
-    LOG.info(_("Agent initialized successfully, now running... "))
+    LOG.info(_LI("Agent initialized successfully, now running... "))
     agent.daemon_loop()
 
 

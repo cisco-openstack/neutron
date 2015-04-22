@@ -13,12 +13,10 @@
 #    License for the specific language governing permissions and limitations
 #    under the License.
 
-import collections
-
+from oslo_db import exception as db_exc
+from oslo_log import log
 from sqlalchemy import or_
 from sqlalchemy.orm import exc
-
-from oslo.db import exception as db_exc
 
 from neutron.common import constants as n_const
 from neutron.db import api as db_api
@@ -27,7 +25,6 @@ from neutron.db import securitygroups_db as sg_db
 from neutron.extensions import portbindings
 from neutron.i18n import _LE, _LI
 from neutron import manager
-from neutron.openstack.common import log
 from neutron.openstack.common import uuidutils
 from neutron.plugins.ml2 import driver_api as api
 from neutron.plugins.ml2 import models
@@ -160,19 +157,38 @@ def set_binding_levels(session, levels):
     if levels:
         for level in levels:
             session.add(level)
+        LOG.debug("For port %(port_id)s, host %(host)s, "
+                  "set binding levels %(levels)s",
+                  {'port_id': levels[0].port_id,
+                   'host': levels[0].host,
+                   'levels': levels})
+    else:
+        LOG.debug("Attempted to set empty binding levels")
 
 
 def get_binding_levels(session, port_id, host):
-    return (session.query(models.PortBindingLevel).
-            filter_by(port_id=port_id, host=host).
-            order_by(models.PortBindingLevel.level).
-            all())
+    if host:
+        result = (session.query(models.PortBindingLevel).
+                  filter_by(port_id=port_id, host=host).
+                  order_by(models.PortBindingLevel.level).
+                  all())
+        LOG.debug("For port %(port_id)s, host %(host)s, "
+                  "got binding levels %(levels)s",
+                  {'port_id': port_id,
+                   'host': host,
+                   'levels': result})
+        return result
 
 
 def clear_binding_levels(session, port_id, host):
-    (session.query(models.PortBindingLevel).
-     filter_by(port_id=port_id, host=host).
-     delete())
+    if host:
+        (session.query(models.PortBindingLevel).
+         filter_by(port_id=port_id, host=host).
+         delete())
+        LOG.debug("For port %(port_id)s, host %(host)s, "
+                  "cleared binding levels",
+                  {'port_id': port_id,
+                   'host': host})
 
 
 def ensure_dvr_port_binding(session, port_id, host, router_id=None):
@@ -259,7 +275,7 @@ def get_ports_and_sgs(port_ids):
 
 
 def get_sg_ids_grouped_by_port(port_ids):
-    sg_ids_grouped_by_port = collections.defaultdict(list)
+    sg_ids_grouped_by_port = {}
     session = db_api.get_session()
     sg_binding_port = sg_db.SecurityGroupPortBinding.port_id
 
@@ -281,6 +297,8 @@ def get_sg_ids_grouped_by_port(port_ids):
         query = query.filter(or_(*or_criteria))
 
         for port, sg_id in query:
+            if port not in sg_ids_grouped_by_port:
+                sg_ids_grouped_by_port[port] = []
             if sg_id:
                 sg_ids_grouped_by_port[port].append(sg_id)
     return sg_ids_grouped_by_port
@@ -297,21 +315,20 @@ def make_port_dict_with_security_groups(port, sec_groups):
     return port_dict
 
 
-def get_port_binding_host(port_id):
-    session = db_api.get_session()
-    with session.begin(subtransactions=True):
-        try:
+def get_port_binding_host(session, port_id):
+    try:
+        with session.begin(subtransactions=True):
             query = (session.query(models.PortBinding).
                      filter(models.PortBinding.port_id.startswith(port_id)).
                      one())
-        except exc.NoResultFound:
-            LOG.debug("No binding found for port %(port_id)s",
-                      {'port_id': port_id})
-            return
-        except exc.MultipleResultsFound:
-            LOG.error(_LE("Multiple ports have port_id starting with %s"),
-                      port_id)
-            return
+    except exc.NoResultFound:
+        LOG.debug("No binding found for port %(port_id)s",
+                  {'port_id': port_id})
+        return
+    except exc.MultipleResultsFound:
+        LOG.error(_LE("Multiple ports have port_id starting with %s"),
+                  port_id)
+        return
     return query.host
 
 

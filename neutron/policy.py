@@ -19,23 +19,21 @@ Policy engine for neutron.  Largely copied from nova.
 
 import collections
 import itertools
-import logging
+import logging as std_logging
 import re
 
-from oslo.config import cfg
-from oslo.utils import excutils
-from oslo.utils import importutils
+from oslo_log import log as logging
+from oslo_utils import excutils
+from oslo_utils import importutils
 
 from neutron.api.v2 import attributes
 from neutron.common import constants as const
 from neutron.common import exceptions
-import neutron.common.utils as utils
 from neutron.i18n import _LE, _LI, _LW
-from neutron.openstack.common import log
 from neutron.openstack.common import policy
 
 
-LOG = log.getLogger(__name__)
+LOG = logging.getLogger(__name__)
 
 _ENFORCER = None
 ADMIN_CTX_POLICY = 'context_is_admin'
@@ -71,11 +69,6 @@ def init():
     global _ENFORCER
     if not _ENFORCER:
         _ENFORCER = policy.Enforcer()
-        # NOTE: Method _get_policy_path in common.policy can not always locate
-        # neutron policy file (when init() is called in tests),
-        # so set it explicitly.
-        _ENFORCER.policy_path = utils.find_config_file({},
-                                                       cfg.CONF.policy_file)
         _ENFORCER.load_rules(True)
 
 
@@ -85,10 +78,11 @@ def refresh():
     init()
 
 
-def get_resource_and_action(action):
+def get_resource_and_action(action, pluralized=None):
     """Extract resource and action (write, read) from api operation."""
     data = action.split(':', 1)[0].split('_', 1)
-    return ("%ss" % data[-1], data[0] != 'get')
+    resource = pluralized or ("%ss" % data[-1])
+    return (resource, data[0] != 'get')
 
 
 def set_rules(policies, overwrite=True):
@@ -168,8 +162,8 @@ def _build_subattr_match_rule(attr_name, attr, action, target):
         return
     data = validate[key[0]]
     if not isinstance(data, dict):
-        LOG.debug(_("Attribute type descriptor is not a dict. Unable to "
-                    "generate any sub-attr policy rule for %s."),
+        LOG.debug("Attribute type descriptor is not a dict. Unable to "
+                  "generate any sub-attr policy rule for %s.",
                   attr_name)
         return
     sub_attr_rules = [policy.RuleCheck('rule', '%s:%s:%s' %
@@ -190,7 +184,7 @@ def _process_rules_list(rules, match_rule):
     return rules
 
 
-def _build_match_rule(action, target):
+def _build_match_rule(action, target, pluralized):
     """Create the rule to match for a given action.
 
     The policy rule to be matched is built in the following way:
@@ -203,7 +197,7 @@ def _build_match_rule(action, target):
        (e.g.: create_router:external_gateway_info:network_id)
     """
     match_rule = policy.RuleCheck('rule', action)
-    resource, is_write = get_resource_and_action(action)
+    resource, is_write = get_resource_and_action(action, pluralized)
     # Attribute-based checks shall not be enforced on GETs
     if is_write:
         # assigning to variable with short name for improving readability
@@ -246,11 +240,11 @@ class OwnerCheck(policy.Check):
     def __init__(self, kind, match):
         # Process the match
         try:
-            self.target_field = re.findall('^\%\((.*)\)s$',
+            self.target_field = re.findall(r'^\%\((.*)\)s$',
                                            match)[0]
         except IndexError:
-            err_reason = (_("Unable to identify a target field from:%s."
-                            "match should be in the form %%(<field_name>)s") %
+            err_reason = (_("Unable to identify a target field from:%s. "
+                            "Match should be in the form %%(<field_name>)s") %
                           match)
             LOG.exception(err_reason)
             raise exceptions.PolicyInitError(
@@ -275,7 +269,7 @@ class OwnerCheck(policy.Check):
                     parent_res, parent_field = do_split(separator)
                     break
                 except ValueError:
-                    LOG.debug(_("Unable to find ':' as separator in %s."),
+                    LOG.debug("Unable to find ':' as separator in %s.",
                               self.target_field)
             else:
                 # If we are here split failed with both separators
@@ -346,31 +340,31 @@ class FieldCheck(policy.Check):
         target_value = target_dict.get(self.field)
         # target_value might be a boolean, explicitly compare with None
         if target_value is None:
-            LOG.debug(_("Unable to find requested field: %(field)s in "
-                        "target: %(target_dict)s"),
-                      {'field': self.field,
-                       'target_dict': target_dict})
+            LOG.debug("Unable to find requested field: %(field)s in target: "
+                      "%(target_dict)s",
+                      {'field': self.field, 'target_dict': target_dict})
             return False
         return target_value == self.value
 
 
-def _prepare_check(context, action, target):
+def _prepare_check(context, action, target, pluralized):
     """Prepare rule, target, and credentials for the policy engine."""
     # Compare with None to distinguish case in which target is {}
     if target is None:
         target = {}
-    match_rule = _build_match_rule(action, target)
+    match_rule = _build_match_rule(action, target, pluralized)
     credentials = context.to_dict()
     return match_rule, target, credentials
 
 
 def log_rule_list(match_rule):
-    if LOG.isEnabledFor(logging.DEBUG):
+    if LOG.isEnabledFor(std_logging.DEBUG):
         rules = _process_rules_list([], match_rule)
         LOG.debug("Enforcing rules: %s", rules)
 
 
-def check(context, action, target, plugin=None, might_not_exist=False):
+def check(context, action, target, plugin=None, might_not_exist=False,
+          pluralized=None):
     """Verifies that the action is valid on the target in this context.
 
     :param context: neutron context
@@ -384,20 +378,28 @@ def check(context, action, target, plugin=None, might_not_exist=False):
     :param might_not_exist: If True the policy check is skipped (and the
         function returns True) if the specified policy does not exist.
         Defaults to false.
+    :param pluralized: pluralized case of resource
+        e.g. firewall_policy -> pluralized = "firewall_policies"
 
     :return: Returns True if access is permitted else False.
     """
     if might_not_exist and not (_ENFORCER.rules and action in _ENFORCER.rules):
         return True
-    match_rule, target, credentials = _prepare_check(context, action, target)
-    result = _ENFORCER.enforce(match_rule, target, credentials)
+    match_rule, target, credentials = _prepare_check(context,
+                                                     action,
+                                                     target,
+                                                     pluralized)
+    result = _ENFORCER.enforce(match_rule,
+                               target,
+                               credentials,
+                               pluralized=pluralized)
     # logging applied rules in case of failure
     if not result:
         log_rule_list(match_rule)
     return result
 
 
-def enforce(context, action, target, plugin=None):
+def enforce(context, action, target, plugin=None, pluralized=None):
     """Verifies that the action is valid on the target in this context.
 
     :param context: neutron context
@@ -408,11 +410,16 @@ def enforce(context, action, target, plugin=None):
         location of the object e.g. ``{'project_id': context.project_id}``
     :param plugin: currently unused and deprecated.
         Kept for backward compatibility.
+    :param pluralized: pluralized case of resource
+        e.g. firewall_policy -> pluralized = "firewall_policies"
 
     :raises neutron.openstack.common.policy.PolicyNotAuthorized:
             if verification fails.
     """
-    rule, target, credentials = _prepare_check(context, action, target)
+    rule, target, credentials = _prepare_check(context,
+                                               action,
+                                               target,
+                                               pluralized)
     try:
         result = _ENFORCER.enforce(rule, target, credentials, action=action,
                                    do_raise=True)

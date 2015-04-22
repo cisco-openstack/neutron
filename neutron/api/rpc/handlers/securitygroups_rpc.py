@@ -12,8 +12,9 @@
 #    License for the specific language governing permissions and limitations
 #    under the License.
 
-from oslo import messaging
+import oslo_messaging
 
+from neutron.common import constants
 from neutron import manager
 
 
@@ -22,7 +23,13 @@ from neutron import manager
 
 
 class SecurityGroupServerRpcCallback(object):
-    """Callback for SecurityGroup agent RPC in plugin implementations."""
+    """Callback for SecurityGroup agent RPC in plugin implementations.
+
+    This class implements the server side of an rpc interface.  The client side
+    can be found in neutron.agent.securitygroups_rpc.SecurityGroupServerRpcApi.
+    For more information on changing rpc interfaces, see
+    doc/source/devref/rpc_api.rst.
+    """
 
     # API version history:
     #   1.1 - Initial version
@@ -30,7 +37,8 @@ class SecurityGroupServerRpcCallback(object):
 
     # NOTE: target must not be overridden in subclasses
     # to keep RPC API version consistent across plugins.
-    target = messaging.Target(version='1.2')
+    target = oslo_messaging.Target(version='1.2',
+                                   namespace=constants.RPC_NAMESPACE_SECGROUP)
 
     @property
     def plugin(self):
@@ -63,9 +71,11 @@ class SecurityGroupServerRpcCallback(object):
         :returns:
         sg_info{
           'security_groups': {sg_id: [rule1, rule2]}
-          'sg_member_ips': {sg_id: {'IPv4': [], 'IPv6': []}}
+          'sg_member_ips': {sg_id: {'IPv4': set(), 'IPv6': set()}}
           'devices': {device_id: {device_info}}
         }
+
+        Note that sets are serialized into lists by rpc code.
         """
         devices_info = kwargs.get('devices')
         ports = self._get_devices_info(devices_info)

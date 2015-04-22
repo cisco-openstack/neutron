@@ -14,14 +14,93 @@
 
 import atexit
 import fcntl
+import grp
+import logging as std_logging
+from logging import handlers
 import os
+import pwd
 import signal
 import sys
 
-from neutron.i18n import _LE
-from neutron.openstack.common import log as logging
+from oslo_log import log as logging
+
+from neutron.common import exceptions
+from neutron.i18n import _LE, _LI
 
 LOG = logging.getLogger(__name__)
+
+
+def setuid(user_id_or_name):
+    try:
+        new_uid = int(user_id_or_name)
+    except (TypeError, ValueError):
+        new_uid = pwd.getpwnam(user_id_or_name).pw_uid
+    if new_uid != 0:
+        try:
+            os.setuid(new_uid)
+        except OSError:
+            msg = _('Failed to set uid %s') % new_uid
+            LOG.critical(msg)
+            raise exceptions.FailToDropPrivilegesExit(msg)
+
+
+def setgid(group_id_or_name):
+    try:
+        new_gid = int(group_id_or_name)
+    except (TypeError, ValueError):
+        new_gid = grp.getgrnam(group_id_or_name).gr_gid
+    if new_gid != 0:
+        try:
+            os.setgid(new_gid)
+        except OSError:
+            msg = _('Failed to set gid %s') % new_gid
+            LOG.critical(msg)
+            raise exceptions.FailToDropPrivilegesExit(msg)
+
+
+def unwatch_log():
+    """Replace WatchedFileHandler handlers by FileHandler ones.
+
+    Neutron logging uses WatchedFileHandler handlers but they do not
+    support privileges drop, this method replaces them by FileHandler
+    handlers supporting privileges drop.
+    """
+    log_root = logging.getLogger(None).logger
+    to_replace = [h for h in log_root.handlers
+                  if isinstance(h, handlers.WatchedFileHandler)]
+    for handler in to_replace:
+        new_handler = std_logging.FileHandler(handler.baseFilename,
+                                              mode=handler.mode,
+                                              encoding=handler.encoding,
+                                              delay=handler.delay)
+        log_root.removeHandler(handler)
+        log_root.addHandler(new_handler)
+
+
+def drop_privileges(user=None, group=None):
+    """Drop privileges to user/group privileges."""
+    if user is None and group is None:
+        return
+
+    if os.geteuid() != 0:
+        msg = _('Root permissions are required to drop privileges.')
+        LOG.critical(msg)
+        raise exceptions.FailToDropPrivilegesExit(msg)
+
+    if group is not None:
+        try:
+            os.setgroups([])
+        except OSError:
+            msg = _('Failed to remove supplemental groups')
+            LOG.critical(msg)
+            raise exceptions.FailToDropPrivilegesExit(msg)
+        setgid(group)
+
+    if user is not None:
+        setuid(user)
+
+    LOG.info(_LI("Process runs with uid/gid: %(uid)s/%(gid)s"),
+             {'uid': os.getuid(), 'gid': os.getgid()})
 
 
 class Pidfile(object):
@@ -77,12 +156,16 @@ class Daemon(object):
     Usage: subclass the Daemon class and override the run() method
     """
     def __init__(self, pidfile, stdin='/dev/null', stdout='/dev/null',
-                 stderr='/dev/null', procname='python', uuid=None):
+                 stderr='/dev/null', procname='python', uuid=None,
+                 user=None, group=None, watch_log=True):
         self.stdin = stdin
         self.stdout = stdout
         self.stderr = stderr
         self.procname = procname
         self.pidfile = Pidfile(pidfile, procname, uuid)
+        self.user = user
+        self.group = group
+        self.watch_log = watch_log
 
     def _fork(self):
         try:
@@ -141,8 +224,10 @@ class Daemon(object):
         self.run()
 
     def run(self):
-        """Override this method when subclassing Daemon.
+        """Override this method and call super().run when subclassing Daemon.
 
         start() will call this method after the process has daemonized.
         """
-        pass
+        if not self.watch_log:
+            unwatch_log()
+        drop_privileges(self.user, self.group)

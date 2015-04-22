@@ -13,29 +13,42 @@
 #    License for the specific language governing permissions and limitations
 #    under the License.
 
-from oslo.db import exception as db_exc
+from oslo_config import cfg
+from oslo_db import exception as db_exc
+from oslo_log import log
 
 from neutron.common import exceptions as exc
-from neutron.i18n import _LW
-from neutron.openstack.common import log
+from neutron.common import utils
 from neutron.plugins.ml2 import driver_api as api
-
-
-# Number of attempts to find a valid segment candidate and allocate it
-DB_MAX_ATTEMPTS = 10
 
 
 LOG = log.getLogger(__name__)
 
 
-class TypeDriverHelper(api.TypeDriver):
-    """TypeDriver Helper for segment allocation.
+class BaseTypeDriver(api.TypeDriver):
+    """BaseTypeDriver for functions common to Segment and flat."""
+
+    def __init__(self):
+        try:
+            self.physnet_mtus = utils.parse_mappings(
+                cfg.CONF.ml2.physical_network_mtus
+            )
+        except Exception:
+            self.physnet_mtus = []
+
+    def get_mtu(self, physical_network=None):
+        return cfg.CONF.ml2.segment_mtu
+
+
+class SegmentTypeDriver(BaseTypeDriver):
+    """SegmentTypeDriver for segment allocation.
 
     Provide methods helping to perform segment allocation fully or partially
     specified.
     """
 
     def __init__(self, model):
+        super(SegmentTypeDriver, self).__init__()
         self.model = model
         self.primary_keys = set(dict(model.__table__.columns))
         self.primary_keys.remove("allocated")
@@ -108,37 +121,32 @@ class TypeDriverHelper(api.TypeDriver):
                       filter_by(allocated=False, **filters))
 
             # Selected segment can be allocated before update by someone else,
-            # We retry until update success or DB_MAX_ATTEMPTS attempts
-            for attempt in range(1, DB_MAX_ATTEMPTS + 1):
-                alloc = select.first()
+            alloc = select.first()
 
-                if not alloc:
-                    # No resource available
-                    return
+            if not alloc:
+                # No resource available
+                return
 
-                raw_segment = dict((k, alloc[k]) for k in self.primary_keys)
-                LOG.debug("%(type)s segment allocate from pool, attempt "
-                          "%(attempt)s started with %(segment)s ",
-                          {"type": network_type, "attempt": attempt,
+            raw_segment = dict((k, alloc[k]) for k in self.primary_keys)
+            LOG.debug("%(type)s segment allocate from pool "
+                      "started with %(segment)s ",
+                      {"type": network_type,
+                       "segment": raw_segment})
+            count = (session.query(self.model).
+                     filter_by(allocated=False, **raw_segment).
+                     update({"allocated": True}))
+            if count:
+                LOG.debug("%(type)s segment allocate from pool "
+                          "success with %(segment)s ",
+                          {"type": network_type,
                            "segment": raw_segment})
-                count = (session.query(self.model).
-                         filter_by(allocated=False, **raw_segment).
-                         update({"allocated": True}))
-                if count:
-                    LOG.debug("%(type)s segment allocate from pool, attempt "
-                              "%(attempt)s success with %(segment)s ",
-                              {"type": network_type, "attempt": attempt,
-                               "segment": raw_segment})
-                    return alloc
+                return alloc
 
-                # Segment allocated since select
-                LOG.debug("Allocate %(type)s segment from pool, "
-                          "attempt %(attempt)s failed with segment "
-                          "%(segment)s",
-                          {"type": network_type, "attempt": attempt,
-                           "segment": raw_segment})
-
-        LOG.warning(_LW("Allocate %(type)s segment from pool failed "
-                        "after %(number)s failed attempts"),
-                    {"type": network_type, "number": DB_MAX_ATTEMPTS})
-        raise exc.NoNetworkFoundInMaximumAllowedAttempts()
+            # Segment allocated since select
+            LOG.debug("Allocate %(type)s segment from pool "
+                      "failed with segment %(segment)s",
+                      {"type": network_type,
+                       "segment": raw_segment})
+            # saving real exception in case we exceeded amount of attempts
+            raise db_exc.RetryRequest(
+                exc.NoNetworkFoundInMaximumAllowedAttempts())

@@ -14,24 +14,18 @@
 
 import hashlib
 import hmac
-import os
-import socket
-import sys
-
-import eventlet
-eventlet.monkey_patch()
 
 import httplib2
 from neutronclient.v2_0 import client
-from oslo.config import cfg
-from oslo import messaging
-from oslo.utils import excutils
+from oslo_config import cfg
+from oslo_log import log as logging
+import oslo_messaging
 import six.moves.urllib.parse as urlparse
 import webob
 
-from neutron.agent.common import config as agent_conf
+from neutron.agent.linux import utils as agent_utils
+from neutron.agent.metadata import config
 from neutron.agent import rpc as agent_rpc
-from neutron.common import config
 from neutron.common import constants as n_const
 from neutron.common import rpc as n_rpc
 from neutron.common import topics
@@ -39,22 +33,36 @@ from neutron.common import utils
 from neutron import context
 from neutron.i18n import _LE, _LW
 from neutron.openstack.common.cache import cache
-from neutron.openstack.common import log as logging
 from neutron.openstack.common import loopingcall
-from neutron import wsgi
 
 LOG = logging.getLogger(__name__)
 
+MODE_MAP = {
+    config.USER_MODE: 0o644,
+    config.GROUP_MODE: 0o664,
+    config.ALL_MODE: 0o666,
+}
+
 
 class MetadataPluginAPI(object):
-    """Agent-side RPC (stub) for agent-to-plugin interaction.
+    """Agent-side RPC for metadata agent-to-plugin interaction.
+
+    This class implements the client side of an rpc interface used by the
+    metadata service to make calls back into the Neutron plugin.  The server
+    side is defined in
+    neutron.api.rpc.handlers.metadata_rpc.MetadataRpcCallback.  For more
+    information about changing rpc interfaces, see
+    doc/source/devref/rpc_api.rst.
 
     API version history:
         1.0 - Initial version.
     """
 
     def __init__(self, topic):
-        target = messaging.Target(topic=topic, version='1.0')
+        target = oslo_messaging.Target(
+            topic=topic,
+            namespace=n_const.RPC_NAMESPACE_METADATA,
+            version='1.0')
         self.client = n_rpc.get_client(target)
 
     def get_ports(self, context, filters):
@@ -63,54 +71,6 @@ class MetadataPluginAPI(object):
 
 
 class MetadataProxyHandler(object):
-    OPTS = [
-        cfg.StrOpt('admin_user',
-                   help=_("Admin user")),
-        cfg.StrOpt('admin_password',
-                   help=_("Admin password"),
-                   secret=True),
-        cfg.StrOpt('admin_tenant_name',
-                   help=_("Admin tenant name")),
-        cfg.StrOpt('auth_url',
-                   help=_("Authentication URL")),
-        cfg.StrOpt('auth_strategy', default='keystone',
-                   help=_("The type of authentication to use")),
-        cfg.StrOpt('auth_region',
-                   help=_("Authentication region")),
-        cfg.BoolOpt('auth_insecure',
-                    default=False,
-                    help=_("Turn off verification of the certificate for"
-                           " ssl")),
-        cfg.StrOpt('auth_ca_cert',
-                   help=_("Certificate Authority public key (CA cert) "
-                          "file for ssl")),
-        cfg.StrOpt('endpoint_type',
-                   default='adminURL',
-                   help=_("Network service endpoint type to pull from "
-                          "the keystone catalog")),
-        cfg.StrOpt('nova_metadata_ip', default='127.0.0.1',
-                   help=_("IP address used by Nova metadata server.")),
-        cfg.IntOpt('nova_metadata_port',
-                   default=8775,
-                   help=_("TCP Port used by Nova metadata server.")),
-        cfg.StrOpt('metadata_proxy_shared_secret',
-                   default='',
-                   help=_('Shared secret to sign instance-id request'),
-                   secret=True),
-        cfg.StrOpt('nova_metadata_protocol',
-                   default='http',
-                   choices=['http', 'https'],
-                   help=_("Protocol to access nova metadata, http or https")),
-        cfg.BoolOpt('nova_metadata_insecure', default=False,
-                    help=_("Allow to perform insecure SSL (https) requests to "
-                           "nova metadata")),
-        cfg.StrOpt('nova_client_cert',
-                   default='',
-                   help=_("Client certificate for nova metadata api server.")),
-        cfg.StrOpt('nova_client_priv_key',
-                   default='',
-                   help=_("Private key of client certificate."))
-    ]
 
     def __init__(self, conf):
         self.conf = conf
@@ -165,7 +125,7 @@ class MetadataProxyHandler(object):
         if self.use_rpc:
             try:
                 return self.plugin_rpc.get_ports(self.context, filters)
-            except (messaging.MessagingException, AttributeError):
+            except (oslo_messaging.MessagingException, AttributeError):
                 # TODO(obondarev): remove fallback once RPC is proven
                 # to work fine with metadata agent (K or L release at most)
                 LOG.warning(_LW('Server does not support metadata RPC, '
@@ -179,9 +139,7 @@ class MetadataProxyHandler(object):
         filters = {}
         if router_id:
             filters['device_id'] = [router_id]
-            filters['device_owner'] = [
-                n_const.DEVICE_OWNER_ROUTER_INTF,
-                n_const.DEVICE_OWNER_DVR_INTERFACE]
+            filters['device_owner'] = n_const.ROUTER_INTERFACE_OWNERS
         if ip_address:
             filters['fixed_ips'] = {'ip_address': [ip_address]}
         if networks:
@@ -309,75 +267,12 @@ class MetadataProxyHandler(object):
                         hashlib.sha256).hexdigest()
 
 
-class UnixDomainHttpProtocol(eventlet.wsgi.HttpProtocol):
-    def __init__(self, request, client_address, server):
-        if client_address == '':
-            client_address = ('<local>', 0)
-        # base class is old-style, so super does not work properly
-        eventlet.wsgi.HttpProtocol.__init__(self, request, client_address,
-                                            server)
-
-
-class WorkerService(wsgi.WorkerService):
-    def start(self):
-        self._server = self._service.pool.spawn(self._service._run,
-                                                self._application,
-                                                self._service._socket)
-
-
-class UnixDomainWSGIServer(wsgi.Server):
-    def __init__(self, name):
-        self._socket = None
-        self._launcher = None
-        self._server = None
-        super(UnixDomainWSGIServer, self).__init__(name)
-
-    def start(self, application, file_socket, workers, backlog):
-        self._socket = eventlet.listen(file_socket,
-                                       family=socket.AF_UNIX,
-                                       backlog=backlog)
-
-        self._launch(application, workers=workers)
-
-    def _run(self, application, socket):
-        """Start a WSGI service in a new green thread."""
-        logger = logging.getLogger('eventlet.wsgi.server')
-        eventlet.wsgi.server(socket,
-                             application,
-                             custom_pool=self.pool,
-                             protocol=UnixDomainHttpProtocol,
-                             log=logging.WritableLogger(logger))
-
-
 class UnixDomainMetadataProxy(object):
-    OPTS = [
-        cfg.StrOpt('metadata_proxy_socket',
-                   default='$state_path/metadata_proxy',
-                   help=_('Location for Metadata Proxy UNIX domain socket')),
-        cfg.IntOpt('metadata_workers',
-                   default=utils.cpu_count() // 2,
-                   help=_('Number of separate worker processes for metadata '
-                          'server')),
-        cfg.IntOpt('metadata_backlog',
-                   default=4096,
-                   help=_('Number of backlog requests to configure the '
-                          'metadata server socket with'))
-    ]
 
     def __init__(self, conf):
         self.conf = conf
-
-        dirname = os.path.dirname(cfg.CONF.metadata_proxy_socket)
-        if os.path.isdir(dirname):
-            try:
-                os.unlink(cfg.CONF.metadata_proxy_socket)
-            except OSError:
-                with excutils.save_and_reraise_exception() as ctxt:
-                    if not os.path.exists(cfg.CONF.metadata_proxy_socket):
-                        ctxt.reraise = False
-        else:
-            os.makedirs(dirname, 0o755)
-
+        agent_utils.ensure_directory_exists_without_file(
+            cfg.CONF.metadata_proxy_socket)
         self._init_state_reporting()
 
     def _init_state_reporting(self):
@@ -417,23 +312,29 @@ class UnixDomainMetadataProxy(object):
             return
         self.agent_state.pop('start_flag', None)
 
+    def _get_socket_mode(self):
+        mode = self.conf.metadata_proxy_socket_mode
+        if mode == config.DEDUCE_MODE:
+            user = self.conf.metadata_proxy_user
+            if (not user or user == '0' or user == 'root'
+                    or agent_utils.is_effective_user(user)):
+                # user is agent effective user or root => USER_MODE
+                mode = config.USER_MODE
+            else:
+                group = self.conf.metadata_proxy_group
+                if not group or agent_utils.is_effective_group(group):
+                    # group is agent effective group => GROUP_MODE
+                    mode = config.GROUP_MODE
+                else:
+                    # otherwise => ALL_MODE
+                    mode = config.ALL_MODE
+        return MODE_MAP[mode]
+
     def run(self):
-        server = UnixDomainWSGIServer('neutron-metadata-agent')
+        server = agent_utils.UnixDomainWSGIServer('neutron-metadata-agent')
         server.start(MetadataProxyHandler(self.conf),
                      self.conf.metadata_proxy_socket,
                      workers=self.conf.metadata_workers,
-                     backlog=self.conf.metadata_backlog)
+                     backlog=self.conf.metadata_backlog,
+                     mode=self._get_socket_mode())
         server.wait()
-
-
-def main():
-    cfg.CONF.register_opts(UnixDomainMetadataProxy.OPTS)
-    cfg.CONF.register_opts(MetadataProxyHandler.OPTS)
-    cache.register_oslo_configs(cfg.CONF)
-    cfg.CONF.set_default(name='cache_url', default='memory://?default_ttl=5')
-    agent_conf.register_agent_state_opts_helper(cfg.CONF)
-    config.init(sys.argv[1:])
-    config.setup_logging()
-    utils.log_opt_values(LOG)
-    proxy = UnixDomainMetadataProxy(cfg.CONF)
-    proxy.run()

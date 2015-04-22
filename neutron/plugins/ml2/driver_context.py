@@ -13,12 +13,16 @@
 #    License for the specific language governing permissions and limitations
 #    under the License.
 
-from oslo.serialization import jsonutils
+from oslo_log import log
+from oslo_serialization import jsonutils
 
 from neutron.common import constants
 from neutron.extensions import portbindings
+from neutron.i18n import _LW
 from neutron.plugins.ml2 import db
 from neutron.plugins.ml2 import driver_api as api
+
+LOG = log.getLogger(__name__)
 
 
 class MechanismDriverContext(object):
@@ -90,18 +94,21 @@ class PortContext(MechanismDriverContext, api.PortContext):
             self._original_binding_levels = None
         self._new_port_status = None
 
-    def prepare_to_bind(self, segments_to_bind):
+    # The following methods are for use by the ML2 plugin and are not
+    # part of the driver API.
+
+    def _prepare_to_bind(self, segments_to_bind):
         self._segments_to_bind = segments_to_bind
         self._new_bound_segment = None
         self._next_segments_to_bind = None
 
-    def clear_binding_levels(self):
+    def _clear_binding_levels(self):
         self._binding_levels = []
 
-    def push_binding_level(self, binding_level):
+    def _push_binding_level(self, binding_level):
         self._binding_levels.append(binding_level)
 
-    def pop_binding_level(self):
+    def _pop_binding_level(self):
         return self._binding_levels.pop()
 
     # The following implement the abstract methods and properties of
@@ -117,6 +124,11 @@ class PortContext(MechanismDriverContext, api.PortContext):
 
     @property
     def status(self):
+        # REVISIT(rkukura): Eliminate special DVR case as part of
+        # resolving bug 1367391?
+        if self._port['device_owner'] == constants.DEVICE_OWNER_DVR_INTERFACE:
+            return self._binding.status
+
         return self._port['status']
 
     @property
@@ -166,10 +178,19 @@ class PortContext(MechanismDriverContext, api.PortContext):
                 self._original_binding_levels[-1].segment_id)
 
     def _expand_segment(self, segment_id):
-        return db.get_segment_by_id(self._plugin_context.session, segment_id)
+        segment = db.get_segment_by_id(self._plugin_context.session,
+                                       segment_id)
+        if not segment:
+            LOG.warning(_LW("Could not expand segment %s"), segment_id)
+        return segment
 
     @property
     def host(self):
+        # REVISIT(rkukura): Eliminate special DVR case as part of
+        # resolving bug 1367391?
+        if self._port['device_owner'] == constants.DEVICE_OWNER_DVR_INTERFACE:
+            return self._binding.host
+
         return self._port.get(portbindings.HOST_ID)
 
     @property
@@ -207,26 +228,3 @@ class PortContext(MechanismDriverContext, api.PortContext):
     def release_dynamic_segment(self, segment_id):
         return self._plugin.type_manager.release_dynamic_segment(
                 self._plugin_context.session, segment_id)
-
-
-class DvrPortContext(PortContext):
-
-    def __init__(self, plugin, plugin_context, port, network, binding,
-                 binding_levels, original_port=None):
-        super(DvrPortContext, self).__init__(
-            plugin, plugin_context, port, network, binding, binding_levels,
-            original_port=original_port)
-
-    @property
-    def host(self):
-        if self._port['device_owner'] == constants.DEVICE_OWNER_DVR_INTERFACE:
-            return self._binding.host
-
-        return super(DvrPortContext, self).host
-
-    @property
-    def status(self):
-        if self._port['device_owner'] == constants.DEVICE_OWNER_DVR_INTERFACE:
-            return self._binding.status
-
-        return super(DvrPortContext, self).status

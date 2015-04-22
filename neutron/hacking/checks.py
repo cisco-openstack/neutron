@@ -16,53 +16,43 @@ import re
 
 import pep8
 
-"""
-Guidelines for writing new hacking checks
+# Guidelines for writing new hacking checks
+#
+#  - Use only for Neutron specific tests. OpenStack general tests
+#    should be submitted to the common 'hacking' module.
+#  - Pick numbers in the range N3xx. Find the current test with
+#    the highest allocated number and then pick the next value.
+#  - Keep the test method code in the source file ordered based
+#    on the N3xx value.
+#  - List the new rule in the top level HACKING.rst file
+#  - Add test cases for each new rule to
+#    neutron/tests/unit/hacking/test_checks.py
 
- - Use only for Neutron specific tests. OpenStack general tests
-   should be submitted to the common 'hacking' module.
- - Pick numbers in the range N3xx. Find the current test with
-   the highest allocated number and then pick the next value.
- - Keep the test method code in the source file ordered based
-   on the N3xx value.
- - List the new rule in the top level HACKING.rst file
- - Add test cases for each new rule to
-   neutron/tests/unit/test_hacking.py
+_all_log_levels = {
+    'error': '_LE',
+    'info': '_LI',
+    'warn': '_LW',
+    'warning': '_LW',
+    'critical': '_LC',
+    'exception': '_LE',
+}
+_all_hints = set(_all_log_levels.values())
 
-"""
 
-log_translation = re.compile(
-    r"(.)*LOG\.(audit|error|info|warn|warning|critical|exception)\(\s*('|\")")
-author_tag_re = (re.compile("^\s*#\s*@?(a|A)uthor"),
-                 re.compile("^\.\.\s+moduleauthor::"))
+def _regex_for_level(level, hint):
+    return r".*LOG\.%(level)s\(\s*((%(wrong_hints)s)\(|'|\")" % {
+        'level': level,
+        'wrong_hints': '|'.join(_all_hints - set([hint])),
+    }
+
+
 log_translation_hint = re.compile(
-    r"(.)*LOG\.(audit|error|info|warn|warning|critical|exception)"
-    "\(\s*(_\(|'|\")")
+    '|'.join('(?:%s)' % _regex_for_level(level, hint)
+             for level, hint in _all_log_levels.iteritems()))
 
-
-def _directory_to_check_translation(filename):
-    # In order to try and speed up the integration of this we will
-    # do it on a directory by directory basis. The last patch of the
-    # series will remove this and the entire code base will be validated.
-    dirs = ["neutron/agent",
-            "neutron/api",
-            "neutron/cmd",
-            "neutron/common",
-            "neutron/db",
-            "neutron/debug",
-            "neutron/extensions",
-            "neutron/hacking",
-            "neutron/locale",
-            "neutron/notifiers",
-            "neutron/openstack",
-            "neutron/scheduler",
-            "neutron/server",
-            "neutron/services",
-            "neutron/plugins/ml2",
-            "neutron/plugins/openvswitch",
-            "neutron/plugins/linuxbridge",
-            "neutron/plugins/cisco"]
-    return any([dir in filename for dir in dirs])
+oslo_namespace_imports_dot = re.compile(r"import[\s]+oslo[.][^\s]+")
+oslo_namespace_imports_from_dot = re.compile(r"from[\s]+oslo[.]")
+oslo_namespace_imports_from_root = re.compile(r"from[\s]+oslo[\s]+import[\s]+")
 
 
 def validate_log_translations(logical_line, physical_line, filename):
@@ -71,14 +61,10 @@ def validate_log_translations(logical_line, physical_line, filename):
         return
     if pep8.noqa(physical_line):
         return
-    msg = "N320: Log messages require translations!"
-    if log_translation.match(logical_line):
-        yield (0, msg)
 
-    if _directory_to_check_translation(filename):
-        msg = "N320: Log messages require translation hints!"
-        if log_translation_hint.match(logical_line):
-            yield (0, msg)
+    msg = "N320: Log messages require translation hints!"
+    if log_translation_hint.match(logical_line):
+        yield (0, msg)
 
 
 def use_jsonutils(logical_line, filename):
@@ -102,18 +88,8 @@ def use_jsonutils(logical_line, filename):
                 yield (pos, msg % {'fun': f[:-1]})
 
 
-def no_author_tags(physical_line):
-    for regex in author_tag_re:
-        if regex.match(physical_line):
-            physical_line = physical_line.lower()
-            pos = physical_line.find('moduleauthor')
-            if pos < 0:
-                pos = physical_line.find('author')
-            return pos, "N322: Don't use author tags"
-
-
 def no_translate_debug_logs(logical_line, filename):
-    """Check for 'LOG.debug(_('
+    """Check for 'LOG.debug(_(' and 'LOG.debug(_Lx('
 
     As per our translation policy,
     https://wiki.openstack.org/wiki/LoggingStandards#Log_Translation
@@ -122,25 +98,45 @@ def no_translate_debug_logs(logical_line, filename):
     * This check assumes that 'LOG' is a logger.
     N319
     """
-    if _directory_to_check_translation(filename):
-        if logical_line.startswith("LOG.debug(_("):
+    for hint in _all_hints:
+        if logical_line.startswith("LOG.debug(%s(" % hint):
             yield(0, "N319 Don't translate debug level logs")
 
 
-def check_assert_called_once(logical_line, filename):
-    msg = ("N323: assert_called_once is a no-op. please use "
-           "assert_called_once_with to test with explicit parameters or an "
-           "assertEqual with call_count.")
-
+def check_assert_called_once_with(logical_line, filename):
+    # Try to detect unintended calls of nonexistent mock methods like:
+    #    assert_called_once
+    #    assertCalledOnceWith
     if 'neutron/tests/' in filename:
-        pos = logical_line.find('.assert_called_once(')
-        if pos != -1:
-            yield (pos, msg)
+        if '.assert_called_once_with(' in logical_line:
+            return
+        if '.assertcalledonce' in logical_line.lower().replace('_', ''):
+            msg = ("N322: Possible use of no-op mock method. "
+                   "please use assert_called_once_with.")
+            yield (0, msg)
+
+
+def check_oslo_namespace_imports(logical_line):
+    if re.match(oslo_namespace_imports_from_dot, logical_line):
+        msg = ("N323: '%s' must be used instead of '%s'.") % (
+               logical_line.replace('oslo.', 'oslo_'),
+               logical_line)
+        yield(0, msg)
+    elif re.match(oslo_namespace_imports_from_root, logical_line):
+        msg = ("N323: '%s' must be used instead of '%s'.") % (
+               logical_line.replace('from oslo import ', 'import oslo_'),
+               logical_line)
+        yield(0, msg)
+    elif re.match(oslo_namespace_imports_dot, logical_line):
+        msg = ("N323: '%s' must be used instead of '%s'.") % (
+               logical_line.replace('import', 'from').replace('.', ' import '),
+               logical_line)
+        yield(0, msg)
 
 
 def factory(register):
     register(validate_log_translations)
     register(use_jsonutils)
-    register(no_author_tags)
-    register(check_assert_called_once)
+    register(check_assert_called_once_with)
     register(no_translate_debug_logs)
+    register(check_oslo_namespace_imports)

@@ -13,7 +13,7 @@
 #    License for the specific language governing permissions and limitations
 #    under the License.
 
-from oslo.config import cfg
+from oslo_config import cfg
 
 from neutron.api import extensions
 from neutron.api.v2 import attributes
@@ -99,10 +99,10 @@ PACKET_FILTER_ATTR_PARAMS = {
            'validate': {'type:uuid': None},
            'is_visible': True},
     'name': {'allow_post': True, 'allow_put': True, 'default': '',
-             'validate': {'type:string': None},
+             'validate': {'type:string': attributes.NAME_MAX_LEN},
              'is_visible': True},
     'tenant_id': {'allow_post': True, 'allow_put': False,
-                  'validate': {'type:string': None},
+                  'validate': {'type:string': attributes.TENANT_ID_MAX_LEN},
                   'required_by_policy': True,
                   'is_visible': True},
     'network_id': {'allow_post': True, 'allow_put': False,

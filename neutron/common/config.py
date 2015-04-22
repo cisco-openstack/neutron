@@ -18,16 +18,19 @@ Routines for configuring Neutron
 """
 
 import os
+import sys
 
-from oslo.config import cfg
-from oslo.db import options as db_options
-from oslo import messaging
+from keystoneclient import auth
+from keystoneclient import session as ks_session
+from oslo_config import cfg
+from oslo_db import options as db_options
+from oslo_log import log as logging
+import oslo_messaging
 from paste import deploy
 
 from neutron.api.v2 import attributes
 from neutron.common import utils
 from neutron.i18n import _LI
-from neutron.openstack.common import log as logging
 from neutron import version
 
 
@@ -68,6 +71,12 @@ core_opts = [
                help=_("Maximum number of host routes per subnet")),
     cfg.IntOpt('max_fixed_ips_per_port', default=5,
                help=_("Maximum number of fixed ips per port")),
+    cfg.StrOpt('default_ipv4_subnet_pool', default=None,
+               help=_("Default IPv4 subnet-pool to be used for automatic "
+                      "subnet CIDR allocation")),
+    cfg.StrOpt('default_ipv6_subnet_pool', default=None,
+               help=_("Default IPv6 subnet-pool to be used for automatic "
+                      "subnet CIDR allocation")),
     cfg.IntOpt('dhcp_lease_duration', default=86400,
                deprecated_name='dhcp_lease_time',
                help=_("DHCP lease duration (in seconds). Use -1 to tell "
@@ -78,7 +87,10 @@ core_opts = [
     cfg.BoolOpt('allow_overlapping_ips', default=False,
                 help=_("Allow overlapping IP support in Neutron")),
     cfg.StrOpt('host', default=utils.get_hostname(),
-               help=_("The hostname Neutron is running on")),
+               help=_("Hostname to be used by the neutron server, agents and "
+                      "services running on this machine. All the agents and "
+                      "services running on this machine must use the same "
+                      "host value.")),
     cfg.BoolOpt('force_gateway_on_subnet', default=True,
                 help=_("Ensure that configured gateway is on subnet. "
                        "For IPv6, validate only if gateway is not a link "
@@ -92,30 +104,36 @@ core_opts = [
                        "floatingip) changes so nova can update its cache.")),
     cfg.StrOpt('nova_url',
                default='http://127.0.0.1:8774/v2',
-               help=_('URL for connection to nova')),
+               help=_('URL for connection to nova. '
+                      'Deprecated in favour of an auth plugin in [nova].')),
     cfg.StrOpt('nova_admin_username',
-               help=_('Username for connecting to nova in admin context')),
+               help=_('Username for connecting to nova in admin context. '
+                      'Deprecated in favour of an auth plugin in [nova].')),
     cfg.StrOpt('nova_admin_password',
-               help=_('Password for connection to nova in admin context'),
+               help=_('Password for connection to nova in admin context. '
+                      'Deprecated in favour of an auth plugin in [nova].'),
                secret=True),
     cfg.StrOpt('nova_admin_tenant_id',
-               help=_('The uuid of the admin nova tenant')),
+               help=_('The uuid of the admin nova tenant. '
+                      'Deprecated in favour of an auth plugin in [nova].')),
     cfg.StrOpt('nova_admin_tenant_name',
-               help=_('The name of the admin nova tenant')),
+               help=_('The name of the admin nova tenant. '
+                      'Deprecated in favour of an auth plugin in [nova].')),
     cfg.StrOpt('nova_admin_auth_url',
                default='http://localhost:5000/v2.0',
                help=_('Authorization URL for connecting to nova in admin '
-                      'context')),
-    cfg.StrOpt('nova_ca_certificates_file',
-               help=_('CA file for novaclient to verify server certificates')),
-    cfg.BoolOpt('nova_api_insecure', default=False,
-                help=_("If True, ignore any SSL validation issues")),
-    cfg.StrOpt('nova_region_name',
-               help=_('Name of nova region to use. Useful if keystone manages'
-                      ' more than one region.')),
+                      'context. '
+                      'Deprecated in favour of an auth plugin in [nova].')),
     cfg.IntOpt('send_events_interval', default=2,
                help=_('Number of seconds between sending events to nova if '
                       'there are any events to send.')),
+    cfg.BoolOpt('advertise_mtu', default=False,
+                help=_('If True, effort is made to advertise MTU settings '
+                       'to VMs via network methods (DHCP and RA MTU options) '
+                       'when the network\'s preferred MTU is known.')),
+    cfg.BoolOpt('vlan_transparent', default=False,
+                help=_('If True, then allow plugins that support it to '
+                       'create VLAN transparent networks.')),
 ]
 
 core_cli_opts = [
@@ -130,7 +148,7 @@ cfg.CONF.register_opts(core_opts)
 cfg.CONF.register_cli_opts(core_cli_opts)
 
 # Ensure that the control exchange is set correctly
-messaging.set_transport_defaults(control_exchange='neutron')
+oslo_messaging.set_transport_defaults(control_exchange='neutron')
 _SQL_CONNECTION_DEFAULT = 'sqlite://'
 # Update the default QueuePool parameters. These can be tweaked by the
 # configuration variables - max_pool_size, max_overflow and pool_timeout
@@ -139,10 +157,31 @@ db_options.set_defaults(cfg.CONF,
                         sqlite_db='', max_pool_size=10,
                         max_overflow=20, pool_timeout=10)
 
+NOVA_CONF_SECTION = 'nova'
+
+nova_deprecated_opts = {
+    'cafile': [cfg.DeprecatedOpt('nova_ca_certificates_file', 'DEFAULT')],
+    'insecure': [cfg.DeprecatedOpt('nova_api_insecure', 'DEFAULT')],
+}
+ks_session.Session.register_conf_options(cfg.CONF, NOVA_CONF_SECTION,
+                                         deprecated_opts=nova_deprecated_opts)
+auth.register_conf_options(cfg.CONF, NOVA_CONF_SECTION)
+
+nova_opts = [
+    cfg.StrOpt('region_name',
+               deprecated_name='nova_region_name',
+               deprecated_group='DEFAULT',
+               help=_('Name of nova region to use. Useful if keystone manages'
+                      ' more than one region.')),
+]
+cfg.CONF.register_opts(nova_opts, group=NOVA_CONF_SECTION)
+
+logging.register_options(cfg.CONF)
+
 
 def init(args, **kwargs):
     cfg.CONF(args=args, project='neutron',
-             version='%%prog %s' % version.version_info.release_string(),
+             version='%%(prog)s %s' % version.version_info.release_string(),
              **kwargs)
 
     # FIXME(ihrachys): if import is put in global, circular import
@@ -161,8 +200,12 @@ def init(args, **kwargs):
 def setup_logging():
     """Sets up the logging options for a log with supplied name."""
     product_name = "neutron"
-    logging.setup(product_name)
+    logging.setup(cfg.CONF, product_name)
     LOG.info(_LI("Logging enabled!"))
+    LOG.info(_LI("%(prog)s version %(version)s"),
+             {'prog': sys.argv[0],
+              'version': version.version_info.release_string()})
+    LOG.debug("command line: %s", " ".join(sys.argv))
 
 
 def load_paste_app(app_name):

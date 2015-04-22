@@ -13,18 +13,21 @@
 #    License for the specific language governing permissions and limitations
 #    under the License.
 
-import eventlet
+from keystoneclient import auth as ks_auth
+from keystoneclient.auth.identity import v2 as v2_auth
+from keystoneclient import session as ks_session
+from novaclient import client as nova_client
 from novaclient import exceptions as nova_exceptions
-import novaclient.v1_1.client as nclient
-from novaclient.v1_1.contrib import server_external_events
-from oslo.config import cfg
+from oslo_config import cfg
+from oslo_log import log as logging
+from oslo_utils import importutils
 from sqlalchemy.orm import attributes as sql_attr
 
 from neutron.common import constants
 from neutron import context
 from neutron.i18n import _LE, _LI, _LW
 from neutron import manager
-from neutron.openstack.common import log as logging
+from neutron.notifiers import batch_notifier
 from neutron.openstack.common import uuidutils
 
 
@@ -35,69 +38,75 @@ VIF_PLUGGED = 'network-vif-plugged'
 NEUTRON_NOVA_EVENT_STATUS_MAP = {constants.PORT_STATUS_ACTIVE: 'completed',
                                  constants.PORT_STATUS_ERROR: 'failed',
                                  constants.PORT_STATUS_DOWN: 'completed'}
+NOVA_API_VERSION = "2"
+
+
+class DefaultAuthPlugin(v2_auth.Password):
+    """A wrapper around standard v2 user/pass to handle bypass url.
+
+    This is only necessary because novaclient doesn't support endpoint_override
+    yet - bug #1403329.
+
+    When this bug is fixed we can pass the endpoint_override to the client
+    instead and remove this class.
+    """
+
+    def __init__(self, **kwargs):
+        self._endpoint_override = kwargs.pop('endpoint_override', None)
+        super(DefaultAuthPlugin, self).__init__(**kwargs)
+
+    def get_endpoint(self, session, **kwargs):
+        if self._endpoint_override:
+            return self._endpoint_override
+
+        return super(DefaultAuthPlugin, self).get_endpoint(session, **kwargs)
 
 
 class Notifier(object):
 
     def __init__(self):
-        # TODO(arosen): we need to cache the endpoints and figure out
-        # how to deal with different regions here....
-        if cfg.CONF.nova_admin_tenant_id:
-            bypass_url = "%s/%s" % (cfg.CONF.nova_url,
-                                    cfg.CONF.nova_admin_tenant_id)
-        else:
-            bypass_url = None
+        # FIXME(jamielennox): A notifier is being created for each Controller
+        # and each Notifier is handling it's own auth. That means that we are
+        # authenticating the exact same thing len(controllers) times. This
+        # should be an easy thing to optimize.
+        auth = ks_auth.load_from_conf_options(cfg.CONF, 'nova')
+        endpoint_override = None
 
-        self.nclient = nclient.Client(
-            username=cfg.CONF.nova_admin_username,
-            api_key=cfg.CONF.nova_admin_password,
-            project_id=cfg.CONF.nova_admin_tenant_name,
-            tenant_id=cfg.CONF.nova_admin_tenant_id,
-            auth_url=cfg.CONF.nova_admin_auth_url,
-            cacert=cfg.CONF.nova_ca_certificates_file,
-            insecure=cfg.CONF.nova_api_insecure,
-            bypass_url=bypass_url,
-            region_name=cfg.CONF.nova_region_name,
+        if not auth:
+            LOG.warning(_LW('Authenticating to nova using nova_admin_* options'
+                            ' is deprecated. This should be done using'
+                            ' an auth plugin, like password'))
+
+            if cfg.CONF.nova_admin_tenant_id:
+                endpoint_override = "%s/%s" % (cfg.CONF.nova_url,
+                                               cfg.CONF.nova_admin_tenant_id)
+
+            auth = DefaultAuthPlugin(
+                auth_url=cfg.CONF.nova_admin_auth_url,
+                username=cfg.CONF.nova_admin_username,
+                password=cfg.CONF.nova_admin_password,
+                tenant_id=cfg.CONF.nova_admin_tenant_id,
+                tenant_name=cfg.CONF.nova_admin_tenant_name,
+                endpoint_override=endpoint_override)
+
+        session = ks_session.Session.load_from_conf_options(cfg.CONF,
+                                                            'nova',
+                                                            auth=auth)
+
+        # NOTE(andreykurilin): novaclient.v1_1 was renamed to v2 and there is
+        # no way to import the contrib module directly without referencing v2,
+        # which would only work for novaclient >= 2.21.0.
+        novaclient_cls = nova_client.get_client_class(NOVA_API_VERSION)
+        server_external_events = importutils.import_module(
+            novaclient_cls.__module__.replace(
+                ".client", ".contrib.server_external_events"))
+
+        self.nclient = novaclient_cls(
+            session=session,
+            region_name=cfg.CONF.nova.region_name,
             extensions=[server_external_events])
-        self.pending_events = []
-        self._waiting_to_send = False
-
-    def queue_event(self, event):
-        """Called to queue sending an event with the next batch of events.
-
-        Sending events individually, as they occur, has been problematic as it
-        can result in a flood of sends.  Previously, there was a loopingcall
-        thread that would send batched events on a periodic interval.  However,
-        maintaining a persistent thread in the loopingcall was also
-        problematic.
-
-        This replaces the loopingcall with a mechanism that creates a
-        short-lived thread on demand when the first event is queued.  That
-        thread will sleep once for the same send_events_interval to allow other
-        events to queue up in pending_events and then will send them when it
-        wakes.
-
-        If a thread is already alive and waiting, this call will simply queue
-        the event and return leaving it up to the thread to send it.
-
-        :param event: the event that occurred.
-        """
-        if not event:
-            return
-
-        self.pending_events.append(event)
-
-        if self._waiting_to_send:
-            return
-
-        self._waiting_to_send = True
-
-        def last_out_sends():
-            eventlet.sleep(cfg.CONF.send_events_interval)
-            self._waiting_to_send = False
-            self.send_events()
-
-        eventlet.spawn_n(last_out_sends)
+        self.batch_notifier = batch_notifier.BatchNotifier(
+            cfg.CONF.send_events_interval, self.send_events)
 
     def _is_compute_port(self, port):
         try:
@@ -143,11 +152,11 @@ class Notifier(object):
             disassociate_returned_obj = {'floatingip': {'port_id': None}}
             event = self.create_port_changed_event(action, original_obj,
                                                    disassociate_returned_obj)
-            self.queue_event(event)
+            self.batch_notifier.queue_event(event)
 
         event = self.create_port_changed_event(action, original_obj,
                                                returned_obj)
-        self.queue_event(event)
+        self.batch_notifier.queue_event(event)
 
     def create_port_changed_event(self, action, original_obj, returned_obj):
         port = None
@@ -224,16 +233,10 @@ class Notifier(object):
 
     def send_port_status(self, mapper, connection, port):
         event = getattr(port, "_notify_event", None)
-        self.queue_event(event)
+        self.batch_notifier.queue_event(event)
         port._notify_event = None
 
-    def send_events(self):
-        if not self.pending_events:
-            return
-
-        batched_events = self.pending_events
-        self.pending_events = []
-
+    def send_events(self, batched_events):
         LOG.debug("Sending events: %s", batched_events)
         try:
             response = self.nclient.server_external_events.create(

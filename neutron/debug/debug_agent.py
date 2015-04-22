@@ -17,14 +17,13 @@ import shlex
 import socket
 
 import netaddr
-from oslo.config import cfg
+from oslo_config import cfg
+from oslo_log import log as logging
 
-from neutron.agent.common import config
 from neutron.agent.linux import dhcp
 from neutron.agent.linux import ip_lib
 from neutron.agent.linux import utils
 from neutron.i18n import _LW
-from neutron.openstack.common import log as logging
 
 
 LOG = logging.getLogger(__name__)
@@ -34,7 +33,7 @@ DEVICE_OWNER_NETWORK_PROBE = 'network:probe'
 DEVICE_OWNER_COMPUTE_PROBE = 'compute:probe'
 
 
-class NeutronDebugAgent():
+class NeutronDebugAgent(object):
 
     OPTS = [
         # Needed for drivers
@@ -45,7 +44,6 @@ class NeutronDebugAgent():
 
     def __init__(self, conf, client, driver):
         self.conf = conf
-        self.root_helper = config.get_root_helper(conf)
         self.client = client
         self.driver = driver
 
@@ -64,7 +62,7 @@ class NeutronDebugAgent():
         if self.conf.use_namespaces:
             namespace = self._get_namespace(port)
 
-        if ip_lib.device_exists(interface_name, self.root_helper, namespace):
+        if ip_lib.device_exists(interface_name, namespace=namespace):
             LOG.debug('Reusing existing device: %s.', interface_name)
         else:
             self.driver.plug(network.id,
@@ -111,7 +109,7 @@ class NeutronDebugAgent():
         bridge = None
         if network.external:
             bridge = self.conf.external_network_bridge
-        ip = ip_lib.IPWrapper(self.root_helper)
+        ip = ip_lib.IPWrapper()
         namespace = self._get_namespace(port)
         if self.conf.use_namespaces and ip.netns.exists(namespace):
             self.driver.unplug(self.driver.get_device_name(port),
@@ -138,7 +136,7 @@ class NeutronDebugAgent():
 
     def exec_command(self, port_id, command=None):
         port = dhcp.DictModel(self.client.show_port(port_id)['port'])
-        ip = ip_lib.IPWrapper(self.root_helper)
+        ip = ip_lib.IPWrapper()
         namespace = self._get_namespace(port)
         if self.conf.use_namespaces:
             if not command:

@@ -30,7 +30,7 @@ EXTENDED_ATTRIBUTES_2_0 = {
 
 
 class DistributedHARouterNotSupported(NotImplementedError):
-    message = _("Currenly distributed HA routers are "
+    message = _("Currently distributed HA routers are "
                 "not supported.")
 
 
@@ -53,6 +53,12 @@ class HANetworkCIDRNotValid(exceptions.NeutronException):
 class HANotEnoughAvailableAgents(exceptions.NeutronException):
     message = _("Not enough l3 agents available to ensure HA. Minimum "
                 "required %(min_agents)s, available %(num_agents)s.")
+
+
+class HAMaximumAgentsNumberNotValid(exceptions.NeutronException):
+    message = _("max_l3_agents_per_router %(max_agents)s config parameter "
+                "is not valid. It has to be greater than or equal to "
+                "min_l3_agents_per_router %(min_agents)s.")
 
 
 class HAMinimumAgentsNumberNotValid(exceptions.NeutronException):

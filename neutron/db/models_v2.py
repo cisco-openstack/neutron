@@ -16,6 +16,7 @@
 import sqlalchemy as sa
 from sqlalchemy import orm
 
+from neutron.api.v2 import attributes as attr
 from neutron.common import constants
 from neutron.db import model_base
 from neutron.openstack.common import uuidutils
@@ -25,7 +26,7 @@ class HasTenant(object):
     """Tenant mixin, add to subclasses that have a tenant."""
 
     # NOTE(jkoelker) tenant_id is just a free form string ;(
-    tenant_id = sa.Column(sa.String(255))
+    tenant_id = sa.Column(sa.String(attr.TENANT_ID_MAX_LEN), index=True)
 
 
 class HasId(object):
@@ -40,7 +41,7 @@ class HasStatusDescription(object):
     """Status with description mixin."""
 
     status = sa.Column(sa.String(16), nullable=False)
-    status_description = sa.Column(sa.String(255))
+    status_description = sa.Column(sa.String(attr.DESCRIPTION_MAX_LEN))
 
 
 class IPAvailabilityRange(model_base.BASEV2):
@@ -69,7 +70,9 @@ class IPAvailabilityRange(model_base.BASEV2):
             name='uniq_ipavailabilityranges0first_ip0allocation_pool_id'),
         sa.UniqueConstraint(
             last_ip, allocation_pool_id,
-            name='uniq_ipavailabilityranges0last_ip0allocation_pool_id'))
+            name='uniq_ipavailabilityranges0last_ip0allocation_pool_id'),
+        model_base.BASEV2.__table_args__
+    )
 
     def __repr__(self):
         return "%s - %s" % (self.first_ip, self.last_ip)
@@ -85,7 +88,7 @@ class IPAllocationPool(model_base.BASEV2, HasId):
     last_ip = sa.Column(sa.String(64), nullable=False)
     available_ranges = orm.relationship(IPAvailabilityRange,
                                         backref='ipallocationpool',
-                                        lazy="joined",
+                                        lazy="select",
                                         cascade='all, delete-orphan')
 
     def __repr__(self):
@@ -126,15 +129,26 @@ class SubnetRoute(model_base.BASEV2, Route):
 class Port(model_base.BASEV2, HasId, HasTenant):
     """Represents a port on a Neutron v2 network."""
 
-    name = sa.Column(sa.String(255))
+    name = sa.Column(sa.String(attr.NAME_MAX_LEN))
     network_id = sa.Column(sa.String(36), sa.ForeignKey("networks.id"),
                            nullable=False)
     fixed_ips = orm.relationship(IPAllocation, backref='ports', lazy='joined')
     mac_address = sa.Column(sa.String(32), nullable=False)
     admin_state_up = sa.Column(sa.Boolean(), nullable=False)
     status = sa.Column(sa.String(16), nullable=False)
-    device_id = sa.Column(sa.String(255), nullable=False)
-    device_owner = sa.Column(sa.String(255), nullable=False)
+    device_id = sa.Column(sa.String(attr.DEVICE_ID_MAX_LEN), nullable=False)
+    device_owner = sa.Column(sa.String(attr.DEVICE_OWNER_MAX_LEN),
+                             nullable=False)
+    __table_args__ = (
+        sa.Index(
+            'ix_ports_network_id_mac_address', 'network_id', 'mac_address'),
+        sa.Index(
+            'ix_ports_network_id_device_owner', 'network_id', 'device_owner'),
+        sa.UniqueConstraint(
+            network_id, mac_address,
+            name='uniq_ports0network_id0mac_address'),
+        model_base.BASEV2.__table_args__
+    )
 
     def __init__(self, id=None, tenant_id=None, name=None, network_id=None,
                  mac_address=None, admin_state_up=None, status=None,
@@ -172,8 +186,9 @@ class Subnet(model_base.BASEV2, HasId, HasTenant):
     are used for the IP allocation.
     """
 
-    name = sa.Column(sa.String(255))
+    name = sa.Column(sa.String(attr.NAME_MAX_LEN))
     network_id = sa.Column(sa.String(36), sa.ForeignKey('networks.id'))
+    subnetpool_id = sa.Column(sa.String(36), index=True)
     ip_version = sa.Column(sa.Integer, nullable=False)
     cidr = sa.Column(sa.String(64), nullable=False)
     gateway_ip = sa.Column(sa.String(64))
@@ -201,13 +216,45 @@ class Subnet(model_base.BASEV2, HasId, HasTenant):
                                   name='ipv6_address_modes'), nullable=True)
 
 
+class SubnetPoolPrefix(model_base.BASEV2):
+    """Represents a neutron subnet pool prefix
+    """
+
+    __tablename__ = 'subnetpoolprefixes'
+
+    cidr = sa.Column(sa.String(64), nullable=False, primary_key=True)
+    subnetpool_id = sa.Column(sa.String(36),
+                              sa.ForeignKey('subnetpools.id'),
+                              nullable=False,
+                              primary_key=True)
+
+
+class SubnetPool(model_base.BASEV2, HasId, HasTenant):
+    """Represents a neutron subnet pool.
+    """
+
+    name = sa.Column(sa.String(255))
+    ip_version = sa.Column(sa.Integer, nullable=False)
+    default_prefixlen = sa.Column(sa.Integer, nullable=False)
+    min_prefixlen = sa.Column(sa.Integer, nullable=False)
+    max_prefixlen = sa.Column(sa.Integer, nullable=False)
+    shared = sa.Column(sa.Boolean, nullable=False)
+    default_quota = sa.Column(sa.Integer, nullable=True)
+    prefixes = orm.relationship(SubnetPoolPrefix,
+                                backref='subnetpools',
+                                cascade='all, delete, delete-orphan',
+                                lazy='joined')
+
+
 class Network(model_base.BASEV2, HasId, HasTenant):
     """Represents a v2 neutron network."""
 
-    name = sa.Column(sa.String(255))
+    name = sa.Column(sa.String(attr.NAME_MAX_LEN))
     ports = orm.relationship(Port, backref='networks')
     subnets = orm.relationship(Subnet, backref='networks',
                                lazy="joined")
     status = sa.Column(sa.String(16))
     admin_state_up = sa.Column(sa.Boolean)
     shared = sa.Column(sa.Boolean)
+    mtu = sa.Column(sa.Integer, nullable=True)
+    vlan_transparent = sa.Column(sa.Boolean, nullable=True)

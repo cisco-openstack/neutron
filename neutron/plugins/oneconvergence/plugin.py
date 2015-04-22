@@ -14,10 +14,11 @@
 
 """Implementation of OneConvergence Neutron Plugin."""
 
-from oslo.config import cfg
-from oslo import messaging
-from oslo.utils import excutils
-from oslo.utils import importutils
+from oslo_config import cfg
+from oslo_log import log as logging
+import oslo_messaging
+from oslo_utils import excutils
+from oslo_utils import importutils
 
 from neutron.agent import securitygroups_rpc as sg_rpc
 from neutron.api.rpc.agentnotifiers import dhcp_rpc_agent_api
@@ -41,7 +42,7 @@ from neutron.db import portbindings_base
 from neutron.db import quota_db  # noqa
 from neutron.db import securitygroups_rpc_base as sg_db_rpc
 from neutron.extensions import portbindings
-from neutron.openstack.common import log as logging
+from neutron.i18n import _LE
 from neutron.plugins.common import constants as svc_constants
 import neutron.plugins.oneconvergence.lib.config  # noqa
 import neutron.plugins.oneconvergence.lib.exception as nvsdexception
@@ -68,7 +69,7 @@ class NVSDPluginV2AgentNotifierApi(sg_rpc.SecurityGroupAgentRpcApiMixin):
         self.topic = topic
         self.topic_port_update = topics.get_topic_name(topic, topics.PORT,
                                                        topics.UPDATE)
-        target = messaging.Target(topic=topic, version='1.0')
+        target = oslo_messaging.Target(topic=topic, version='1.0')
         self.client = n_rpc.get_client(target)
 
     def port_update(self, context, port):
@@ -135,6 +136,7 @@ class OneConvergencePluginV2(db_base_plugin_v2.NeutronDbPluginV2,
             cfg.CONF.network_scheduler_driver)
         self.router_scheduler = importutils.import_object(
             cfg.CONF.router_scheduler_driver)
+        self.start_periodic_dhcp_agent_status_check()
 
     def oneconvergence_init(self):
         """Initialize the connections and set the log levels for the plugin."""
@@ -233,8 +235,8 @@ class OneConvergencePluginV2(db_base_plugin_v2.NeutronDbPluginV2,
                 #Log the message and delete the subnet from the neutron
                 super(OneConvergencePluginV2,
                       self).delete_subnet(context, neutron_subnet['id'])
-                LOG.error(_("Failed to create subnet, "
-                          "deleting it from neutron"))
+                LOG.error(_LE("Failed to create subnet, "
+                              "deleting it from neutron"))
 
         return neutron_subnet
 
@@ -297,8 +299,8 @@ class OneConvergencePluginV2(db_base_plugin_v2.NeutronDbPluginV2,
             self.nvsdlib.create_port(tenant_id, neutron_port)
         except nvsdexception.NVSDAPIException:
             with excutils.save_and_reraise_exception():
-                LOG.error(_("Deleting newly created "
-                          "neutron port %s"), port_id)
+                LOG.error(_LE("Deleting newly created "
+                              "neutron port %s"), port_id)
                 super(OneConvergencePluginV2, self).delete_port(context,
                                                                 port_id)
 
@@ -345,8 +347,6 @@ class OneConvergencePluginV2(db_base_plugin_v2.NeutronDbPluginV2,
             neutron_port = super(OneConvergencePluginV2,
                                  self).get_port(context, port_id)
 
-            self._delete_port_security_group_bindings(context, port_id)
-
             router_ids = self.disassociate_floatingips(
                 context, port_id, do_notify=False)
 
@@ -370,7 +370,7 @@ class OneConvergencePluginV2(db_base_plugin_v2.NeutronDbPluginV2,
             self.nvsdlib.create_floatingip(neutron_floatingip)
         except nvsdexception.NVSDAPIException:
             with excutils.save_and_reraise_exception():
-                LOG.error(_("Failed to create floatingip"))
+                LOG.error(_LE("Failed to create floatingip"))
                 super(OneConvergencePluginV2,
                       self).delete_floatingip(context,
                                               neutron_floatingip['id'])
@@ -409,7 +409,7 @@ class OneConvergencePluginV2(db_base_plugin_v2.NeutronDbPluginV2,
             self.nvsdlib.create_router(neutron_router)
         except nvsdexception.NVSDAPIException:
             with excutils.save_and_reraise_exception():
-                LOG.error(_("Failed to create router"))
+                LOG.error(_LE("Failed to create router"))
                 super(OneConvergencePluginV2,
                       self).delete_router(context, neutron_router['id'])
 

@@ -17,7 +17,7 @@
 Neutron base exception handling.
 """
 
-from oslo.utils import excutils
+from oslo_utils import excutils
 
 
 class NeutronException(Exception):
@@ -79,6 +79,10 @@ class SubnetNotFound(NotFound):
     message = _("Subnet %(subnet_id)s could not be found")
 
 
+class SubnetPoolNotFound(NotFound):
+    message = _("Subnet pool %(subnetpool_id)s could not be found")
+
+
 class PortNotFound(NotFound):
     message = _("Port %(port_id)s could not be found")
 
@@ -120,8 +124,19 @@ class SubnetInUse(InUse):
 
 class PortInUse(InUse):
     message = _("Unable to complete operation on port %(port_id)s "
-                "for network %(net_id)s. Port already has an attached"
+                "for network %(net_id)s. Port already has an attached "
                 "device %(device_id)s.")
+
+
+class ServicePortInUse(InUse):
+    message = _("Port %(port_id)s cannot be deleted directly via the "
+                "port API: %(reason)s")
+
+
+class PortBound(InUse):
+    message = _("Unable to complete operation on port %(port_id)s, "
+                "port is already bound, port type: %(vif_type)s, "
+                "old_mac %(old_mac)s, new_mac %(new_mac)s")
 
 
 class MacAddressInUse(InUse):
@@ -139,6 +154,16 @@ class DNSNameServersExhausted(BadRequest):
     # NOTE(xchenum): probably make sense to use quota exceeded exception?
     message = _("Unable to complete operation for %(subnet_id)s. "
                 "The number of DNS nameservers exceeds the limit %(quota)s.")
+
+
+class InvalidIpForNetwork(BadRequest):
+    message = _("IP address %(ip_address)s is not a valid IP "
+                "for any of the subnets on the specified network.")
+
+
+class InvalidIpForSubnet(BadRequest):
+    message = _("IP address %(ip_address)s is not a valid IP "
+                "for the specified subnet.")
 
 
 class IpAddressInUse(InUse):
@@ -203,8 +228,13 @@ class InvalidAllocationPool(BadRequest):
     message = _("The allocation pool %(pool)s is not valid.")
 
 
+class UnsupportedPortDeviceOwner(Conflict):
+    message = _("Operation %(op)s is not supported for device_owner "
+                "%(device_owner)s on port %(port_id)s.")
+
+
 class OverlappingAllocationPools(Conflict):
-    message = _("Found overlapping allocation pools:"
+    message = _("Found overlapping allocation pools: "
                 "%(pool_1)s %(pool_2)s for subnet %(subnet_cidr)s.")
 
 
@@ -227,10 +257,6 @@ class BridgeDoesNotExist(NeutronException):
 
 class PreexistingDeviceFailure(NeutronException):
     message = _("Creation failed. %(dev_name)s already exists.")
-
-
-class SudoRequired(NeutronException):
-    message = _("Sudo privilege is required to run this command.")
 
 
 class QuotaResourceUnknown(NotFound):
@@ -339,3 +365,91 @@ class InvalidCIDR(BadRequest):
 
 class RouterNotCompatibleWithAgent(NeutronException):
     message = _("Router '%(router_id)s' is not compatible with this agent")
+
+
+class DvrHaRouterNotSupported(NeutronException):
+    message = _("Router '%(router_id)s' cannot be both DVR and HA")
+
+
+class FailToDropPrivilegesExit(SystemExit):
+    """Exit exception raised when a drop privileges action fails."""
+    code = 99
+
+
+class FloatingIpSetupException(NeutronException):
+    def __init__(self, message=None):
+        self.message = message
+        super(FloatingIpSetupException, self).__init__()
+
+
+class IpTablesApplyException(NeutronException):
+    def __init__(self, message=None):
+        self.message = message
+        super(IpTablesApplyException, self).__init__()
+
+
+class NetworkIdOrRouterIdRequiredError(NeutronException):
+    message = _('network_id and router_id are None. One must be provided.')
+
+
+class AbortSyncRouters(NeutronException):
+    message = _("Aborting periodic_sync_routers_task due to an error")
+
+
+# Shared *aas exceptions, pending them being refactored out of Neutron
+# proper.
+
+class FirewallInternalDriverError(NeutronException):
+    """Fwaas exception for all driver errors.
+
+    On any failure or exception in the driver, driver should log it and
+    raise this exception to the agent
+    """
+    message = _("%(driver)s: Internal driver error.")
+
+
+class MissingMinSubnetPoolPrefix(BadRequest):
+    message = _("Unspecified minimum subnet pool prefix")
+
+
+class EmptySubnetPoolPrefixList(BadRequest):
+    message = _("Empty subnet pool prefix list")
+
+
+class PrefixVersionMismatch(BadRequest):
+    message = _("Cannot mix IPv4 and IPv6 prefixes in a subnet pool")
+
+
+class UnsupportedMinSubnetPoolPrefix(BadRequest):
+    message = _("Prefix '%(prefix)s' not supported in IPv%(version)s pool")
+
+
+class IllegalSubnetPoolPrefixBounds(BadRequest):
+    message = _("Illegal prefix bounds: %(prefix_type)s=%(prefixlen)s, "
+                "%(base_prefix_type)s=%(base_prefixlen)s")
+
+
+class IllegalSubnetPoolPrefixUpdate(BadRequest):
+    message = _("Illegal update to prefixes: %(msg)s")
+
+
+class SubnetAllocationError(NeutronException):
+    message = _("Failed to allocate subnet: %(reason)s")
+
+
+class MinPrefixSubnetAllocationError(BadRequest):
+    message = _("Unable to allocate subnet with prefix length %(prefixlen)s, "
+                "minimum allowed prefix is %(min_prefixlen)s")
+
+
+class MaxPrefixSubnetAllocationError(BadRequest):
+    message = _("Unable to allocate subnet with prefix length %(prefixlen)s, "
+                "maximum allowed prefix is %(max_prefixlen)s")
+
+
+class SubnetPoolDeleteError(BadRequest):
+    message = _("Unable to delete subnet pool: %(reason)s")
+
+
+class SubnetPoolQuotaExceeded(OverQuota):
+    message = _("Per-tenant subnet pool prefix quota exceeded")

@@ -1,4 +1,4 @@
-# Copyright 2014 OpenStack Foundation
+# Copyright 2015 OpenStack Foundation
 #
 #    Licensed under the Apache License, Version 2.0 (the "License"); you may
 #    not use this file except in compliance with the License. You may obtain
@@ -16,44 +16,31 @@
 """ML2 hierarchical binding
 
 Revision ID: 2d2a8a565438
-Revises: 408cfbf6923c
+Revises: 4119216b7365
 Create Date: 2014-08-24 21:56:36.422885
 
 """
 
 # revision identifiers, used by Alembic.
 revision = '2d2a8a565438'
-down_revision = '408cfbf6923c'
+down_revision = '4119216b7365'
 
 from alembic import op
 import sqlalchemy as sa
-
-fk_names = {
-    'mysql': {
-        'ml2_port_bindings': {
-            'segment': 'ml2_port_bindings_ibfk_2'
-        },
-        'ml2_dvr_port_bindings': {
-            'segment': 'ml2_dvr_port_bindings_ibfk_2'
-        },
-    },
-    'postgresql': {
-        'ml2_port_bindings': {
-            'segment': 'ml2_port_bindings_segment_fkey'
-        },
-        'ml2_dvr_port_bindings': {
-            'segment': 'ml2_dvr_port_bindings_segment_fkey'
-        },
-    },
-}
+from sqlalchemy.engine import reflection
 
 port_binding_tables = ['ml2_port_bindings', 'ml2_dvr_port_bindings']
 
 
-def upgrade(active_plugins=None, options=None):
+def upgrade():
 
-    context = op.get_context()
-    dialect = context.bind.dialect.name
+    inspector = reflection.Inspector.from_engine(op.get_bind())
+    fk_name = [fk['name'] for fk in
+               inspector.get_foreign_keys('ml2_port_bindings')
+               if 'segment' in fk['constrained_columns']]
+    fk_name_dvr = [fk['name'] for fk in
+                   inspector.get_foreign_keys('ml2_dvr_port_bindings')
+                   if 'segment' in fk['constrained_columns']]
 
     op.create_table(
         'ml2_port_binding_levels',
@@ -77,63 +64,11 @@ def upgrade(active_plugins=None, options=None):
             "AND driver <> '';"
         ) % table)
 
-    op.drop_constraint(fk_names[dialect]['ml2_dvr_port_bindings']['segment'],
-                       'ml2_dvr_port_bindings', 'foreignkey')
+    op.drop_constraint(fk_name_dvr[0], 'ml2_dvr_port_bindings', 'foreignkey')
     op.drop_column('ml2_dvr_port_bindings', 'cap_port_filter')
     op.drop_column('ml2_dvr_port_bindings', 'segment')
     op.drop_column('ml2_dvr_port_bindings', 'driver')
 
-    op.drop_constraint(fk_names[dialect]['ml2_port_bindings']['segment'],
-                       'ml2_port_bindings', 'foreignkey')
+    op.drop_constraint(fk_name[0], 'ml2_port_bindings', 'foreignkey')
     op.drop_column('ml2_port_bindings', 'driver')
     op.drop_column('ml2_port_bindings', 'segment')
-
-
-def downgrade(active_plugins=None, options=None):
-
-    context = op.get_context()
-    dialect = context.bind.dialect.name
-
-    op.add_column('ml2_port_bindings',
-                  sa.Column('segment', sa.String(length=36), nullable=True))
-    op.add_column('ml2_port_bindings',
-                  sa.Column('driver', sa.String(length=64), nullable=True))
-    op.create_foreign_key(
-        fk_names[dialect]['ml2_port_bindings']['segment'],
-        source='ml2_port_bindings', referent='ml2_network_segments',
-        local_cols=['segment'], remote_cols=['id'], ondelete='SET NULL'
-    )
-
-    op.add_column('ml2_dvr_port_bindings',
-                  sa.Column('driver', sa.String(length=64), nullable=True))
-    op.add_column('ml2_dvr_port_bindings',
-                  sa.Column('segment', sa.String(length=36), nullable=True))
-    op.add_column('ml2_dvr_port_bindings',
-                  sa.Column('cap_port_filter', sa.Boolean, nullable=False))
-    op.create_foreign_key(
-        fk_names[dialect]['ml2_dvr_port_bindings']['segment'],
-        source='ml2_dvr_port_bindings', referent='ml2_network_segments',
-        local_cols=['segment'], remote_cols=['id'], ondelete='SET NULL'
-    )
-
-    for table in port_binding_tables:
-        if dialect == 'postgresql':
-            op.execute((
-                "UPDATE %s pb "
-                "SET driver = pbl.driver, segment = pbl.segment_id "
-                "FROM ml2_port_binding_levels pbl "
-                "WHERE pb.port_id = pbl.port_id "
-                "AND pb.host = pbl.host "
-                "AND pbl.level = 0;"
-            ) % table)
-        else:
-            op.execute((
-                "UPDATE %s pb "
-                "INNER JOIN ml2_port_binding_levels pbl "
-                "ON pb.port_id = pbl.port_id "
-                "AND pb.host = pbl.host "
-                "AND pbl.level = 0 "
-                "SET pb.driver = pbl.driver, pb.segment = pbl.segment_id;"
-            ) % table)
-
-    op.drop_table('ml2_port_binding_levels')

@@ -14,14 +14,13 @@
 #    License for the specific language governing permissions and limitations
 #    under the License.
 
-from oslo.config import cfg
-from oslo import messaging
-from oslo.messaging import serializer as om_serializer
+from oslo_config import cfg
+from oslo_log import log as logging
+import oslo_messaging
+from oslo_messaging import serializer as om_serializer
 
 from neutron.common import exceptions
-from neutron.common import log
 from neutron import context
-from neutron.openstack.common import log as logging
 from neutron.openstack.common import service
 
 
@@ -52,11 +51,11 @@ TRANSPORT_ALIASES = {
 def init(conf):
     global TRANSPORT, NOTIFIER
     exmods = get_allowed_exmods()
-    TRANSPORT = messaging.get_transport(conf,
-                                        allowed_remote_exmods=exmods,
-                                        aliases=TRANSPORT_ALIASES)
+    TRANSPORT = oslo_messaging.get_transport(conf,
+                                             allowed_remote_exmods=exmods,
+                                             aliases=TRANSPORT_ALIASES)
     serializer = RequestContextSerializer()
-    NOTIFIER = messaging.Notifier(TRANSPORT, serializer=serializer)
+    NOTIFIER = oslo_messaging.Notifier(TRANSPORT, serializer=serializer)
 
 
 def cleanup():
@@ -82,17 +81,17 @@ def get_allowed_exmods():
 def get_client(target, version_cap=None, serializer=None):
     assert TRANSPORT is not None
     serializer = RequestContextSerializer(serializer)
-    return messaging.RPCClient(TRANSPORT,
-                               target,
-                               version_cap=version_cap,
-                               serializer=serializer)
+    return oslo_messaging.RPCClient(TRANSPORT,
+                                    target,
+                                    version_cap=version_cap,
+                                    serializer=serializer)
 
 
 def get_server(target, endpoints, serializer=None):
     assert TRANSPORT is not None
     serializer = RequestContextSerializer(serializer)
-    return messaging.get_rpc_server(TRANSPORT, target, endpoints,
-                                    'eventlet', serializer)
+    return oslo_messaging.get_rpc_server(TRANSPORT, target, endpoints,
+                                         'eventlet', serializer)
 
 
 def get_notifier(service=None, host=None, publisher_id=None):
@@ -135,72 +134,6 @@ class RequestContextSerializer(om_serializer.Serializer):
                                load_admin_roles=False, **rpc_ctxt_dict)
 
 
-class RpcProxy(object):
-    '''
-    This class is created to facilitate migration from oslo-incubator
-    RPC layer implementation to oslo.messaging and is intended to
-    emulate RpcProxy class behaviour using oslo.messaging API once the
-    migration is applied.
-    '''
-    RPC_API_NAMESPACE = None
-
-    def __init__(self, topic, default_version, version_cap=None):
-        super(RpcProxy, self).__init__()
-        self.topic = topic
-        target = messaging.Target(topic=topic, version=default_version)
-        self._client = get_client(target, version_cap=version_cap)
-
-    def make_msg(self, method, **kwargs):
-        return {'method': method,
-                'namespace': self.RPC_API_NAMESPACE,
-                'args': kwargs}
-
-    @log.log
-    def call(self, context, msg, **kwargs):
-        return self.__call_rpc_method(
-            context, msg, rpc_method='call', **kwargs)
-
-    @log.log
-    def cast(self, context, msg, **kwargs):
-        self.__call_rpc_method(context, msg, rpc_method='cast', **kwargs)
-
-    @log.log
-    def fanout_cast(self, context, msg, **kwargs):
-        kwargs['fanout'] = True
-        self.__call_rpc_method(context, msg, rpc_method='cast', **kwargs)
-
-    def __call_rpc_method(self, context, msg, **kwargs):
-        options = dict(
-            ((opt, kwargs[opt])
-             for opt in ('fanout', 'timeout', 'topic', 'version')
-             if kwargs.get(opt))
-        )
-        if msg['namespace']:
-            options['namespace'] = msg['namespace']
-
-        if options:
-            callee = self._client.prepare(**options)
-        else:
-            callee = self._client
-
-        func = getattr(callee, kwargs['rpc_method'])
-        return func(context, msg['method'], **msg['args'])
-
-
-class RpcCallback(object):
-    '''
-    This class is created to facilitate migration from oslo-incubator
-    RPC layer implementation to oslo.messaging and is intended to set
-    callback version using oslo.messaging API once the migration is
-    applied.
-    '''
-    RPC_API_VERSION = '1.0'
-
-    def __init__(self):
-        super(RpcCallback, self).__init__()
-        self.target = messaging.Target(version=self.RPC_API_VERSION)
-
-
 class Service(service.Service):
     """Service object for binaries running on hosts.
 
@@ -220,18 +153,12 @@ class Service(service.Service):
         super(Service, self).start()
 
         self.conn = create_connection(new=True)
-        LOG.debug("Creating Consumer connection for Service %s" %
+        LOG.debug("Creating Consumer connection for Service %s",
                   self.topic)
 
         endpoints = [self.manager]
 
-        # Share this same connection for these Consumers
-        self.conn.create_consumer(self.topic, endpoints, fanout=False)
-
-        node_topic = '%s.%s' % (self.topic, self.host)
-        self.conn.create_consumer(node_topic, endpoints, fanout=False)
-
-        self.conn.create_consumer(self.topic, endpoints, fanout=True)
+        self.conn.create_consumer(self.topic, endpoints)
 
         # Hook to allow the manager to do other initializations after
         # the rpc connection is created.
@@ -258,7 +185,7 @@ class Connection(object):
         self.servers = []
 
     def create_consumer(self, topic, endpoints, fanout=False):
-        target = messaging.Target(
+        target = oslo_messaging.Target(
             topic=topic, server=cfg.CONF.host, fanout=fanout)
         server = get_server(target, endpoints)
         self.servers.append(server)
@@ -267,6 +194,12 @@ class Connection(object):
         for server in self.servers:
             server.start()
         return self.servers
+
+    def close(self):
+        for server in self.servers:
+            server.stop()
+        for server in self.servers:
+            server.wait()
 
 
 # functions

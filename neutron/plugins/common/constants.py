@@ -17,6 +17,7 @@
 CORE = "CORE"
 DUMMY = "DUMMY"
 LOADBALANCER = "LOADBALANCER"
+LOADBALANCERV2 = "LOADBALANCERV2"
 FIREWALL = "FIREWALL"
 VPN = "VPN"
 METERING = "METERING"
@@ -27,6 +28,7 @@ L3_ROUTER_NAT = "L3_ROUTER_NAT"
 EXT_TO_SERVICE_MAPPING = {
     'dummy': DUMMY,
     'lbaas': LOADBALANCER,
+    'lbaasv2': LOADBALANCERV2,
     'fwaas': FIREWALL,
     'vpnaas': VPN,
     'metering': METERING,
@@ -35,12 +37,13 @@ EXT_TO_SERVICE_MAPPING = {
 
 # TODO(salvatore-orlando): Move these (or derive them) from conf file
 ALLOWED_SERVICES = [CORE, DUMMY, LOADBALANCER, FIREWALL, VPN, METERING,
-                    L3_ROUTER_NAT]
+                    L3_ROUTER_NAT, LOADBALANCERV2]
 
 COMMON_PREFIXES = {
     CORE: "",
     DUMMY: "/dummy_svc",
     LOADBALANCER: "/lb",
+    LOADBALANCERV2: "/lbaas",
     FIREWALL: "/fw",
     VPN: "/vpn",
     METERING: "/metering",
@@ -83,3 +86,7 @@ TYPE_NONE = 'none'
 
 # Values for network_type
 VXLAN_UDP_PORT = 4789
+
+# Network Type MTU overhead
+GRE_ENCAP_OVERHEAD = 42
+VXLAN_ENCAP_OVERHEAD = 50

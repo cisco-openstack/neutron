@@ -1116,7 +1116,7 @@ class Ml2Plugin(db_base_plugin_v2.NeutronDbPluginV2,
                 original_port=original_port)
             new_host_port = self._get_host_port_if_changed(mech_context, attrs)
             need_port_update_notify |= self._process_port_binding(
-                mech_context, context, attrs)
+                mech_context, attrs)
             self.mechanism_manager.update_port_precommit(mech_context)
 
         # Notifications must be sent after the above transaction is complete

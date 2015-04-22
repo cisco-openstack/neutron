@@ -235,23 +235,6 @@ class TestMl2NetworksV2(test_plugin.TestNetworksV2,
         for attr in pnet.ATTRIBUTES:
             self.assertEqual(expected_net[attr], network[attr])
 
-    def test_list_mpnetworks_with_segmentation_id(self):
-        self._create_and_verify_networks(self.nets)
-
-        # get all networks with seg_id=1 (including multisegment networks)
-        lookup_vlan_id = 1
-        networks = self._lookup_network_by_segmentation_id(lookup_vlan_id, 2)
-
-        # get the mpnet
-        networks = [n for n in networks['networks'] if mpnet.SEGMENTS in n]
-        network = networks.pop()
-        # verify attributes of the looked up item
-        segments = network[mpnet.SEGMENTS]
-        expected_segments = self.mp_nets[0][mpnet.SEGMENTS]
-        self.assertEqual(len(expected_segments), len(segments))
-        for expected, actual in zip(expected_segments, segments):
-            self.assertEqual(expected, actual)
-
     def test_create_network_segment_allocation_fails(self):
         plugin = manager.NeutronManager.get_plugin()
         with mock.patch.object(plugin.type_manager, 'create_network_segments',

@@ -1,5 +1,3 @@
-# Copyright 2014 OpenStack Foundation
-#
 #    Licensed under the Apache License, Version 2.0 (the "License"); you may
 #    not use this file except in compliance with the License. You may obtain
 #    a copy of the License at
@@ -13,29 +11,19 @@
 #    under the License.
 #
 
-"""ML2 Refactor for provider networks
+"""kilo
 
-Revision ID: 33a3d31845ad
-Revises: kilo
-Create Date: 2014-08-18 14:33:13.124512
+Revision ID: kilo
+Revises: 20c469a5f920
+Create Date: 2015-04-16 00:00:00.000000
 
 """
 
 # revision identifiers, used by Alembic.
-revision = '33a3d31845ad'
-down_revision = 'kilo'
-
-from alembic import op
-import sqlalchemy as sa
+revision = 'kilo'
+down_revision = '20c469a5f920'
 
 
-def upgrade(active_plugins=None, options=None):
-
-    op.add_column('ml2_network_segments',
-                  sa.Column('provider_segment', sa.Boolean(),
-                            nullable=False, server_default=sa.sql.false()))
-
-
-def downgrade(active_plugins=None, options=None):
-
-    op.drop_column('ml2_network_segments', 'provider_segment')
+def upgrade():
+    """A no-op migration for marking the Kilo release."""
+    pass

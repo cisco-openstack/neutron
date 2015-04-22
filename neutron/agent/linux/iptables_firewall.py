@@ -59,7 +59,6 @@ class NWFilterFirewall(object):
 
     def __init__(self):
         self.ebtables = ebtables_manager.EbtablesManager(
-            root_helper=cfg.CONF.AGENT.root_helper,
             prefix_chain='neutron-nwfilter')
         with ebtables_manager.EbtablesManagerTransaction(self.ebtables):
             del self.ebtables.tables['nat']

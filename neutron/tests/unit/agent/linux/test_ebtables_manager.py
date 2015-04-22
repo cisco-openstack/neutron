@@ -132,7 +132,6 @@ class EbtablesTestCase(base.BaseTestCase):
 
     def setUp(self):
         super(EbtablesTestCase, self).setUp()
-        self.root_helper = 'sudo'
         self.ebtables_path = '/tmp/ebtables-'
         self.execute_p = mock.patch('neutron.agent.linux.utils.execute')
         self.execute = self.execute_p.start()
@@ -198,16 +197,14 @@ class EbtablesTestCase(base.BaseTestCase):
                 return ''
 
         self.execute.side_effect = fake_execute
-        save = ebtables_manager.ebtables_save(self.execute,
-                                              self.root_helper)
+        save = ebtables_manager.ebtables_save(self.execute)
         self.assertEqual(dump_save, save)
 
         self.execute.reset_mock()
         self.execute.side_effect = None
         ebtables_manager.ebtables_restore(dump_save,
                                           self.ebtables_path,
-                                          self.execute,
-                                          self.root_helper)
+                                          self.execute)
         str_dump_filter = ['EBTABLES_ATOMIC_FILE=/tmp/ebtables-filter',
                            'ebtables', '-t', 'filter']
         str_dump_nat = ['EBTABLES_ATOMIC_FILE=/tmp/ebtables-nat', 'ebtables',
@@ -216,51 +213,51 @@ class EbtablesTestCase(base.BaseTestCase):
                            'ebtables', '-t', 'broute']
         expected = [
             mock.call(str_dump_filter + ['--atomic-init'],
-                      root_helper=self.root_helper),
+                      run_as_root=True),
             mock.call(str_dump_filter + ['-P', 'INPUT', 'ACCEPT'],
-                      root_helper=self.root_helper),
+                      run_as_root=True),
             mock.call(str_dump_filter + ['-P', 'FORWARD', 'ACCEPT'],
-                      root_helper=self.root_helper),
+                      run_as_root=True),
             mock.call(str_dump_filter + ['-P', 'OUTPUT', 'ACCEPT'],
-                      root_helper=self.root_helper),
+                      run_as_root=True),
             mock.call(str_dump_filter + ['-A', 'INPUT', '-j', 'CONTINUE'],
-                      root_helper=self.root_helper),
+                      run_as_root=True),
             mock.call(str_dump_filter + ['-A', 'FORWARD', '-j', 'CONTINUE'],
-                      root_helper=self.root_helper),
+                      run_as_root=True),
             mock.call(str_dump_filter + ['-A', 'OUTPUT', '-j', 'CONTINUE'],
-                      root_helper=self.root_helper),
+                      run_as_root=True),
             mock.call(str_dump_filter + ['-C', 'OUTPUT', '1', '1', '-j',
                                          'CONTINUE'],
-                      root_helper=self.root_helper),
+                      run_as_root=True),
             mock.call(str_dump_filter + ['--atomic-commit'],
-                      root_helper=self.root_helper),
+                      run_as_root=True),
             mock.call(str_dump_nat + ['--atomic-init'],
-                      root_helper=self.root_helper),
+                      run_as_root=True),
             mock.call(str_dump_nat + ['-P', 'PREROUTING', 'ACCEPT'],
-                      root_helper=self.root_helper),
+                      run_as_root=True),
             mock.call(str_dump_nat + ['-P', 'OUTPUT', 'ACCEPT'],
-                      root_helper=self.root_helper),
+                      run_as_root=True),
             mock.call(str_dump_nat + ['-P', 'POSTROUTING', 'ACCEPT'],
-                      root_helper=self.root_helper),
+                      run_as_root=True),
             mock.call(str_dump_nat + ['-A', 'PREROUTING', '-j', 'CONTINUE'],
-                      root_helper=self.root_helper),
+                      run_as_root=True),
             mock.call(str_dump_nat + ['-A', 'OUTPUT', '-j', 'CONTINUE'],
-                      root_helper=self.root_helper),
+                      run_as_root=True),
             mock.call(str_dump_nat + ['-A', 'POSTROUTING', '-j', 'CONTINUE'],
-                      root_helper=self.root_helper),
+                      run_as_root=True),
             mock.call(str_dump_nat + ['-C', 'POSTROUTING', '1', '1', '-j',
                                       'CONTINUE'],
-                      root_helper=self.root_helper),
+                      run_as_root=True),
             mock.call(str_dump_nat + ['--atomic-commit'],
-                      root_helper=self.root_helper),
+                      run_as_root=True),
             mock.call(str_dump_broute + ['--atomic-init'],
-                      root_helper=self.root_helper),
+                      run_as_root=True),
             mock.call(str_dump_broute + ['-P', 'BROUTING', 'ACCEPT'],
-                      root_helper=self.root_helper),
+                      run_as_root=True),
             mock.call(str_dump_broute + ['-A', 'BROUTING', '-j', 'CONTINUE'],
-                      root_helper=self.root_helper),
+                      run_as_root=True),
             mock.call(str_dump_broute + ['--atomic-commit'],
-                      root_helper=self.root_helper)
+                      run_as_root=True),
         ]
         self.execute.assert_has_calls(expected)
 
@@ -294,7 +291,6 @@ class EbtablesTestCase(base.BaseTestCase):
 
         self.execute.side_effect = fake_execute
         save = ebtables_manager.ebtables_save(self.execute,
-                                              self.root_helper,
                                               tables=['filter'])
         self.assertEqual(dump_save, save)
 
@@ -302,30 +298,29 @@ class EbtablesTestCase(base.BaseTestCase):
         self.execute.side_effect = None
         ebtables_manager.ebtables_restore(dump_save,
                                           self.ebtables_path,
-                                          self.execute,
-                                          self.root_helper)
+                                          self.execute)
         str_dump_filter = ['EBTABLES_ATOMIC_FILE=/tmp/ebtables-filter',
                            'ebtables', '-t', 'filter']
         expected = [
             mock.call(str_dump_filter + ['--atomic-init'],
-                      root_helper=self.root_helper),
+                      run_as_root=True),
             mock.call(str_dump_filter + ['-P', 'INPUT', 'ACCEPT'],
-                      root_helper=self.root_helper),
+                      run_as_root=True),
             mock.call(str_dump_filter + ['-P', 'FORWARD', 'ACCEPT'],
-                      root_helper=self.root_helper),
+                      run_as_root=True),
             mock.call(str_dump_filter + ['-P', 'OUTPUT', 'ACCEPT'],
-                      root_helper=self.root_helper),
+                      run_as_root=True),
             mock.call(str_dump_filter + ['-A', 'INPUT', '-j', 'CONTINUE'],
-                      root_helper=self.root_helper),
+                      run_as_root=True),
             mock.call(str_dump_filter + ['-A', 'FORWARD', '-j', 'CONTINUE'],
-                      root_helper=self.root_helper),
+                      run_as_root=True),
             mock.call(str_dump_filter + ['-A', 'OUTPUT', '-j', 'CONTINUE'],
-                      root_helper=self.root_helper),
+                      run_as_root=True),
             mock.call(str_dump_filter + ['-C', 'OUTPUT', '1', '1', '-j',
                                          'CONTINUE'],
-                      root_helper=self.root_helper),
+                      run_as_root=True),
             mock.call(str_dump_filter + ['--atomic-commit'],
-                      root_helper=self.root_helper)
+                      run_as_root=True),
         ]
         self.execute.assert_has_calls(expected)
 
@@ -334,9 +329,7 @@ class EbtablesManagerTestCase(base.BaseTestCase):
 
     def setUp(self):
         super(EbtablesManagerTestCase, self).setUp()
-        self.root_helper = 'sudo'
-        self.ebtables = (ebtables_manager.
-                         EbtablesManager(root_helper=self.root_helper))
+        self.ebtables = ebtables_manager.EbtablesManager()
 
         self.ebt_save_p = mock.patch.object(ebtables_manager, 'ebtables_save')
         self.ebt_save = self.ebt_save_p.start()
@@ -352,25 +345,20 @@ class EbtablesManagerTestCase(base.BaseTestCase):
                          os.path.basename(inspect.stack()[-1][1])[:max_len])
 
     def test_prefix_chain(self):
-        self.ebtables = (ebtables_manager.
-                         EbtablesManager(root_helper=self.root_helper))
+        self.ebtables = ebtables_manager.EbtablesManager()
         bn = ebtables_manager.ChainName.binary_name()
         self.assertEqual(self.ebtables.prefix_chain,
                          bn[:ebtables_manager.ChainName.MAX_LEN_PREFIX_CHAIN])
 
         pc = ('0123456789' * 5)
-        self.ebtables = (ebtables_manager.
-                         EbtablesManager(root_helper=self.root_helper,
-                                         prefix_chain=pc))
+        self.ebtables = ebtables_manager.EbtablesManager(prefix_chain=pc)
         self.assertEqual(self.ebtables.prefix_chain,
                          pc[:ebtables_manager.ChainName.MAX_LEN_PREFIX_CHAIN])
         pass
 
     def test_get_chain_name_all_possible_characters_prefix_chain(self):
         name = '0123456789' * 5
-        self.ebtables = (ebtables_manager.
-                         EbtablesManager(root_helper=self.root_helper,
-                                         prefix_chain=name))
+        self.ebtables = ebtables_manager.EbtablesManager(prefix_chain=name)
         pc = self.ebtables.prefix_chain
         name_nowrap = name[:ebtables_manager.ChainName.MAX_CHAIN_LEN_EBTABLES]
         name_wrap = name[:ebtables_manager.ChainName.MAX_CHAIN_LEN_EBTABLES -
@@ -386,9 +374,7 @@ class EbtablesManagerTestCase(base.BaseTestCase):
 
     def test_get_chain_name_one_character_prefix_chain(self):
         name = '0'
-        self.ebtables = (ebtables_manager.
-                         EbtablesManager(root_helper=self.root_helper,
-                                         prefix_chain=name))
+        self.ebtables = ebtables_manager.EbtablesManager(prefix_chain=name)
         pc = self.ebtables.prefix_chain
         name_nowrap = name[:ebtables_manager.ChainName.MAX_CHAIN_LEN_EBTABLES]
         name_wrap = name[:ebtables_manager.ChainName.MAX_CHAIN_LEN_EBTABLES -
@@ -421,15 +407,12 @@ class EbtablesManagerTestCase(base.BaseTestCase):
         self.ebt_restore.assert_called_once_with(ebtables_dump_mod,
                                                  self.ebtables.ebtables_path,
                                                  self.ebtables.execute,
-                                                 self.ebtables.root_helper,
                                                  namespace=None)
 
     def test_add_and_remove_chain_with_rule_and_custom_prefix_chain(self):
         pc = ("abcdef" * 5)[:ebtables_manager.ChainName.MAX_LEN_PREFIX_CHAIN]
 
-        self.ebtables = (ebtables_manager.
-                         EbtablesManager(root_helper=self.root_helper,
-                                         prefix_chain=pc))
+        self.ebtables = ebtables_manager.EbtablesManager(prefix_chain=pc)
         ebtables_dump = FILTER_DUMP1 + NAT_DUMP1 + BROUTE_DUMP1
         ebtables_dump = ebtables_dump.replace(
             ebtables_manager.ChainName.binary_name(), pc)
@@ -448,7 +431,6 @@ class EbtablesManagerTestCase(base.BaseTestCase):
         self.ebt_restore.assert_called_with(ebtables_dump_mod,
                                             self.ebtables.ebtables_path,
                                             self.ebtables.execute,
-                                            self.ebtables.root_helper,
                                             namespace=None)
 
         self.ebt_save.return_value = ebtables_dump_mod
@@ -460,7 +442,6 @@ class EbtablesManagerTestCase(base.BaseTestCase):
         self.ebt_restore.assert_called_with(ebtables_dump_mod,
                                             self.ebtables.ebtables_path,
                                             self.ebtables.execute,
-                                            self.ebtables.root_helper,
                                             namespace=None)
 
     def test_add_and_remove_filter_chain(self):
@@ -473,7 +454,6 @@ class EbtablesManagerTestCase(base.BaseTestCase):
         self.ebt_restore.assert_called_with(ebtables_dump_mod,
                                             self.ebtables.ebtables_path,
                                             self.ebtables.execute,
-                                            self.ebtables.root_helper,
                                             namespace=None)
 
         self.ebt_save.return_value = ebtables_dump_mod
@@ -483,7 +463,6 @@ class EbtablesManagerTestCase(base.BaseTestCase):
         self.ebt_restore.assert_called_with(ebtables_dump_mod,
                                             self.ebtables.ebtables_path,
                                             self.ebtables.execute,
-                                            self.ebtables.root_helper,
                                             namespace=None)
 
     def test_add_and_remove_nat_chain(self):
@@ -499,7 +478,6 @@ class EbtablesManagerTestCase(base.BaseTestCase):
         self.ebt_restore.assert_called_with(ebtables_dump_mod,
                                             self.ebtables.ebtables_path,
                                             self.ebtables.execute,
-                                            self.ebtables.root_helper,
                                             namespace=None)
 
         self.ebt_save.return_value = ebtables_dump_mod
@@ -509,7 +487,6 @@ class EbtablesManagerTestCase(base.BaseTestCase):
         self.ebt_restore.assert_called_with(ebtables_dump_mod,
                                             self.ebtables.ebtables_path,
                                             self.ebtables.execute,
-                                            self.ebtables.root_helper,
                                             namespace=None)
 
     def test_add_and_remove_broute_chain(self):
@@ -532,7 +509,6 @@ class EbtablesManagerTestCase(base.BaseTestCase):
         self.ebt_restore.assert_called_with(ebtables_dump_mod,
                                             self.ebtables.ebtables_path,
                                             self.ebtables.execute,
-                                            self.ebtables.root_helper,
                                             namespace=None)
 
         self.ebt_save.return_value = ebtables_dump_mod
@@ -542,7 +518,6 @@ class EbtablesManagerTestCase(base.BaseTestCase):
         self.ebt_restore.assert_called_with(ebtables_dump_mod,
                                             self.ebtables.ebtables_path,
                                             self.ebtables.execute,
-                                            self.ebtables.root_helper,
                                             namespace=None)
 
     def test_add_and_remove_filter_rule(self):
@@ -560,7 +535,6 @@ class EbtablesManagerTestCase(base.BaseTestCase):
         self.ebt_restore.assert_called_with(ebtables_dump_mod,
                                             self.ebtables.ebtables_path,
                                             self.ebtables.execute,
-                                            self.ebtables.root_helper,
                                             namespace=None)
 
         self.ebt_save.return_value = ebtables_dump_mod
@@ -571,7 +545,6 @@ class EbtablesManagerTestCase(base.BaseTestCase):
         self.ebt_restore.assert_called_with(ebtables_dump_mod,
                                             self.ebtables.ebtables_path,
                                             self.ebtables.execute,
-                                            self.ebtables.root_helper,
                                             namespace=None)
 
     def test_add_and_remove_nat_rule(self):
@@ -594,7 +567,6 @@ class EbtablesManagerTestCase(base.BaseTestCase):
         self.ebt_restore.assert_called_with(ebtables_dump_mod,
                                             self.ebtables.ebtables_path,
                                             self.ebtables.execute,
-                                            self.ebtables.root_helper,
                                             namespace=None)
 
         self.ebt_save.return_value = ebtables_dump_mod
@@ -608,7 +580,6 @@ class EbtablesManagerTestCase(base.BaseTestCase):
         self.ebt_restore.assert_called_with(ebtables_dump_mod,
                                             self.ebtables.ebtables_path,
                                             self.ebtables.execute,
-                                            self.ebtables.root_helper,
                                             namespace=None)
 
     def test_add_and_remove_broute_rule(self):
@@ -637,7 +608,6 @@ class EbtablesManagerTestCase(base.BaseTestCase):
         self.ebt_restore.assert_called_with(ebtables_dump_mod,
                                             self.ebtables.ebtables_path,
                                             self.ebtables.execute,
-                                            self.ebtables.root_helper,
                                             namespace=None)
 
         self.ebt_save.return_value = ebtables_dump_mod
@@ -658,7 +628,6 @@ class EbtablesManagerTestCase(base.BaseTestCase):
         self.ebt_restore.assert_called_with(ebtables_dump_mod,
                                             self.ebtables.ebtables_path,
                                             self.ebtables.execute,
-                                            self.ebtables.root_helper,
                                             namespace=None)
 
     def test_empty_filter_chain(self):
@@ -671,7 +640,6 @@ class EbtablesManagerTestCase(base.BaseTestCase):
         self.ebt_restore.assert_called_with(ebtables_dump_mod,
                                             self.ebtables.ebtables_path,
                                             self.ebtables.execute,
-                                            self.ebtables.root_helper,
                                             namespace=None)
 
         self.ebt_save.return_value = ebtables_dump_mod
@@ -681,7 +649,6 @@ class EbtablesManagerTestCase(base.BaseTestCase):
         self.ebt_restore.assert_called_with(ebtables_dump_mod,
                                             self.ebtables.ebtables_path,
                                             self.ebtables.execute,
-                                            self.ebtables.root_helper,
                                             namespace=None)
 
     def test_empty_nat_chain(self):
@@ -697,7 +664,6 @@ class EbtablesManagerTestCase(base.BaseTestCase):
         self.ebt_restore.assert_called_with(ebtables_dump_mod,
                                             self.ebtables.ebtables_path,
                                             self.ebtables.execute,
-                                            self.ebtables.root_helper,
                                             namespace=None)
 
         self.ebt_save.return_value = ebtables_dump_mod
@@ -707,7 +673,6 @@ class EbtablesManagerTestCase(base.BaseTestCase):
         self.ebt_restore.assert_called_with(ebtables_dump_mod,
                                             self.ebtables.ebtables_path,
                                             self.ebtables.execute,
-                                            self.ebtables.root_helper,
                                             namespace=None)
 
     def test_empty_broute_chain(self):
@@ -730,7 +695,6 @@ class EbtablesManagerTestCase(base.BaseTestCase):
         self.ebt_restore.assert_called_with(ebtables_dump_mod,
                                             self.ebtables.ebtables_path,
                                             self.ebtables.execute,
-                                            self.ebtables.root_helper,
                                             namespace=None)
 
         self.ebt_save.return_value = ebtables_dump_mod
@@ -746,7 +710,6 @@ class EbtablesManagerTestCase(base.BaseTestCase):
         self.ebt_restore.assert_called_with(ebtables_dump_mod,
                                             self.ebtables.ebtables_path,
                                             self.ebtables.execute,
-                                            self.ebtables.root_helper,
                                             namespace=None)
 
     def test_add_rule_to_a_nonexistent_chain(self):
@@ -779,8 +742,7 @@ class EbtablesManagerTestCase(base.BaseTestCase):
                 '-j tmp2-INPUT, pcnt = 1234 -- bcnt = 56789\n')
             acc = self.ebtables.get_traffic_counters('INPUT')
             cmd = 'ebtables -t %(pc)sfilter -L INPUT --Lc' % EBTABLES_ARG
-            execute.assert_call_with(cmd.split(' '),
-                                     root_helper=self.root_helper)
+            execute.assert_call_with(cmd.split(' '))
             self.assertEqual(acc['pkts'], 2468)
             self.assertEqual(acc['bytes'], 113578)
 
@@ -794,8 +756,7 @@ class EbtablesManagerTestCase(base.BaseTestCase):
                 '-j tmp2-INPUT, pcnt = 1234 -- bcnt = 56789\n')
             acc = self.ebtables.get_traffic_counters('tmp1-INPUT')
             cmd = 'ebtables -t %(pc)sfilter -L INPUT --Lc' % EBTABLES_ARG
-            execute.assert_call_with(cmd.split(' '),
-                                     root_helper=self.root_helper)
+            execute.assert_call_with(cmd.split(' '))
             self.assertIsNone(acc)
 
     def test_get_traffic_counters_with_zero(self):
@@ -808,8 +769,7 @@ class EbtablesManagerTestCase(base.BaseTestCase):
                 '-j tmp2-INPUT, pcnt = 1234 -- bcnt = 56789\n')
             acc = self.ebtables.get_traffic_counters('INPUT', zero=True)
             cmd = 'ebtables -t %(pc)sfilter -L INPUT --Lc -Z' % EBTABLES_ARG
-            execute.assert_call_with(cmd.split(' '),
-                                     root_helper=self.root_helper)
+            execute.assert_call_with(cmd.split(' '))
             self.assertEqual(acc['pkts'], 2468)
             self.assertEqual(acc['bytes'], 113578)
 
@@ -854,7 +814,6 @@ class EbtablesManagerTestCase(base.BaseTestCase):
         self.ebt_restore.assert_called_with(ebtables_dump_mod,
                                             self.ebtables.ebtables_path,
                                             self.ebtables.execute,
-                                            self.ebtables.root_helper,
                                             namespace=None)
 
     def test_defer_apply(self):
@@ -874,9 +833,7 @@ class EbtablesManagerTransactionTestCase(base.BaseTestCase):
 
     def setUp(self):
         super(EbtablesManagerTransactionTestCase, self).setUp()
-        self.root_helper = 'sudo'
-        self.ebtables = (ebtables_manager.
-                         EbtablesManager(root_helper=self.root_helper))
+        self.ebtables = ebtables_manager.EbtablesManager()
 
         self.ebt_save_p = mock.patch.object(ebtables_manager, 'ebtables_save')
         self.ebt_save = self.ebt_save_p.start()

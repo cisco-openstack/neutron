@@ -116,11 +116,6 @@ class PortBindingTestCase(test_plugin.NeutronDbPluginV2TestCase):
             self.assertIsNone(
                 self.plugin.get_bound_port_context(ctx, port['port']['id']))
 
-    def test_hierarchical_binding(self):
-        self._test_port_binding("host-hierarchical",
-                                portbindings.VIF_TYPE_OVS,
-                                False, True, network_type='vlan')
-
     def test_get_bound_port_context_cache_hit(self):
         ctx = context.get_admin_context()
         with self.port(name='name') as port:

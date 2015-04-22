@@ -23,12 +23,12 @@ import inspect
 import os
 import re
 
-from oslo.config import cfg
+from oslo_config import cfg
+from oslo_log import log as logging
 
 from neutron.agent.linux import utils as linux_utils
 from neutron.common import utils
-from neutron.openstack.common.gettextutils import _LW
-from neutron.openstack.common import log as logging
+from neutron.i18n import _LW
 
 
 LOG = logging.getLogger(__name__)
@@ -79,7 +79,7 @@ def _process_table(lines):
 
 
 @utils.synchronized('ebtables', external=True)
-def ebtables_save(execute, root_helper, namespace=None, tables=None):
+def ebtables_save(execute, namespace=None, tables=None):
     """Generates text output of the ebtables rules.
 
     Based on:
@@ -96,13 +96,13 @@ def ebtables_save(execute, root_helper, namespace=None, tables=None):
         args = ['ebtables', '-t', table, '-L', '--Lc']
         if namespace:
             args = ['ip', 'netns', 'exec', namespace] + args
-        lines = execute(args, root_helper=root_helper).split('\n')
+        lines = execute(args, run_as_root=True).split('\n')
         ebtables_save_result += _process_table(lines)
     return ebtables_save_result[:-1]
 
 
 @utils.synchronized('ebtables', external=True)
-def ebtables_restore(lines, ebtables_path, execute, root_helper,
+def ebtables_restore(lines, ebtables_path, execute,
                      namespace=None):
     """Imports text ebtables rules. Similar to iptables-restore.
 
@@ -126,7 +126,7 @@ def ebtables_restore(lines, ebtables_path, execute, root_helper,
         #                 init and commit commands.
         #                 But the generated file by init ebtables command is
         #                 only readable and writable by root.
-        execute(cmd, root_helper=root_helper)
+        execute(cmd, run_as_root=True)
 
     exprs = {'table': re.compile(r'^\*([a-z]+)$'),
              'chain': re.compile(r'^:(.*) ([A-Z]+)$'),
@@ -142,7 +142,7 @@ def ebtables_restore(lines, ebtables_path, execute, root_helper,
             args = line[match.end():].split()
             _run_ebtables_cmd(cur_table, args)
             if int(match.group(1)) > 0 and int(match.group(2)) > 0:
-                p = re.compile('^-A (\S+) ')
+                p = re.compile(r'^-A (\S+) ')
                 rule = p.sub(r'-C \1 %s %s ', line[match.end() + 1:])
                 args = (rule % (match.group(1), match.group(2))).split()
                 _run_ebtables_cmd(cur_table, args)
@@ -402,7 +402,7 @@ class EbtablesManager(ChainName):
 
     """
 
-    def __init__(self, _execute=None, root_helper=None, namespace=None,
+    def __init__(self, _execute=None, namespace=None,
                  prefix_chain=None):
         self.ebtables_path = CONF.ebtables_path
         if _execute:
@@ -411,7 +411,6 @@ class EbtablesManager(ChainName):
             self.execute = linux_utils.execute
 
         self.iptables_apply_deferred = False
-        self.root_helper = root_helper
         self.namespace = namespace
         self.prefix_chain = self._get_prefix_chain(prefix_chain)
 
@@ -452,7 +451,7 @@ class EbtablesManager(ChainName):
 
         """
         tables = [table_name for table_name, table in self.tables.iteritems()]
-        all_lines = ebtables_save(self.execute, self.root_helper,
+        all_lines = ebtables_save(self.execute,
                                   namespace=self.namespace,
                                   tables=tables).split('\n')
 
@@ -461,7 +460,7 @@ class EbtablesManager(ChainName):
             all_lines[start:end] = self._modify_rules(all_lines[start:end],
                                                       table, table_name)
         ebtables_restore('\n'.join(all_lines), self.ebtables_path,
-                         self.execute, self.root_helper,
+                         self.execute,
                          namespace=self.namespace)
         LOG.debug("EbtablesManager.apply completed with success")
 
@@ -684,8 +683,7 @@ class EbtablesManager(ChainName):
                 args.append('-Z')
             if self.namespace:
                 args = ['ip', 'netns', 'exec', self.namespace] + args
-            current_table = (self.execute(args,
-                             root_helper=self.root_helper))
+            current_table = self.execute(args, run_as_root=True)
             current_lines = current_table.split('\n')
 
             for line in current_lines[3:]:

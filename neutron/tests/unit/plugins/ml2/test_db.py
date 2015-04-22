@@ -78,27 +78,32 @@ class Ml2DBTestCase(testlib_api.SqlTestCase):
     def test_network_segments_for_provider_network(self):
         segment = {api.NETWORK_TYPE: 'vlan',
                    api.PHYSICAL_NETWORK: 'physnet1',
+                   api.PROVIDER_SEGMENT: False,
                    api.SEGMENTATION_ID: 1}
         self._create_segments([segment])
 
     def test_network_segments_is_dynamic_true(self):
         segment = {api.NETWORK_TYPE: 'vlan',
                    api.PHYSICAL_NETWORK: 'physnet1',
+                   api.PROVIDER_SEGMENT: False,
                    api.SEGMENTATION_ID: 1}
         self._create_segments([segment], is_seg_dynamic=True)
 
     def test_network_segments_for_multiprovider_network(self):
         segments = [{api.NETWORK_TYPE: 'vlan',
                     api.PHYSICAL_NETWORK: 'physnet1',
+                    api.PROVIDER_SEGMENT: False,
                     api.SEGMENTATION_ID: 1},
                     {api.NETWORK_TYPE: 'vlan',
                      api.PHYSICAL_NETWORK: 'physnet1',
+                     api.PROVIDER_SEGMENT: False,
                      api.SEGMENTATION_ID: 2}]
         self._create_segments(segments)
 
     def test_get_segment_by_id(self):
         segment = {api.NETWORK_TYPE: 'vlan',
                    api.PHYSICAL_NETWORK: 'physnet1',
+                   api.PROVIDER_SEGMENT: False,
                    api.SEGMENTATION_ID: 1}
 
         net_segment = self._create_segments([segment])[0]
@@ -115,6 +120,7 @@ class Ml2DBTestCase(testlib_api.SqlTestCase):
     def test_delete_network_segment(self):
         segment = {api.NETWORK_TYPE: 'vlan',
                    api.PHYSICAL_NETWORK: 'physnet1',
+                   api.PROVIDER_SEGMENT: False,
                    api.SEGMENTATION_ID: 1}
 
         net_segment = self._create_segments([segment])[0]

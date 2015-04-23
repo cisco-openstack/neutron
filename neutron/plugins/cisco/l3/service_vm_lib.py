@@ -15,7 +15,7 @@
 from novaclient import client
 from novaclient import exceptions as nova_exc
 from novaclient import utils as n_utils
-from oslo_config import cfg
+from oslo.config import cfg
 
 from neutron import manager
 from neutron.openstack.common import log as logging

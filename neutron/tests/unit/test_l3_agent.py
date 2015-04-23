@@ -213,9 +213,9 @@ def router_append_interface(router, count=1, ip_version=4, ra_mode=None,
         cidr_pool = '35.4.%i.0/24'
         gw_pool = '35.4.%i.1'
     elif ip_version == 6:
-        ip_pool = 'fd01:%x::6'
-        cidr_pool = 'fd01:%x::/64'
-        gw_pool = 'fd01:%x::1'
+        ip_pool = 'fd01:%x:1::6'
+        cidr_pool = 'fd01:%x:1::/64'
+        gw_pool = 'fd01:%x:1::1'
     else:
         raise ValueError("Invalid ip_version: %s" % ip_version)
 
@@ -1906,7 +1906,36 @@ vrrp_instance VR_1 {
         self.assertEqual(['1234'], agent._router_ids())
         self.assertFalse(agent._clean_stale_namespaces)
 
-    def test_process_router_if_compatible_with_no_ext_net_in_conf(self):
+    def test_process_routers_update_rpc_timeout_on_get_routers(self):
+        agent = l3_agent.L3NATAgent(HOSTNAME, self.conf)
+        agent.fullsync = False
+        agent._process_routers = mock.Mock()
+        self.plugin_api.get_routers.side_effect = (
+            messaging.MessagingTimeout)
+        agent._queue = mock.Mock()
+        update = mock.Mock()
+        update.router = None
+        agent._queue.each_update_to_next_router.side_effect = [
+            [(None, update)]]
+
+        agent._process_router_update()
+        self.assertTrue(agent.fullsync)
+        self.assertFalse(agent._process_routers.called)
+
+    def test_process_routers_update_rpc_timeout_on_get_ext_net(self):
+        agent = l3_agent.L3NATAgent(HOSTNAME, self.conf)
+        agent.fullsync = False
+        agent._process_routers = mock.Mock()
+        agent._process_routers.side_effect = (
+            messaging.MessagingTimeout)
+        agent._queue = mock.Mock()
+        agent._queue.each_update_to_next_router.side_effect = [
+            [(None, mock.Mock())]]
+
+        agent._process_router_update()
+        self.assertTrue(agent.fullsync)
+
+    def test_process_routers_with_no_ext_net_in_conf(self):
         agent = l3_agent.L3NATAgent(HOSTNAME, self.conf)
         self.plugin_api.get_external_network_id.return_value = 'aaa'
 

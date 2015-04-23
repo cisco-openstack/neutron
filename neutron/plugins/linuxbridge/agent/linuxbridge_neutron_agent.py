@@ -51,7 +51,9 @@ from neutron.plugins.linuxbridge.common import constants as lconst
 LOG = logging.getLogger(__name__)
 
 BRIDGE_NAME_PREFIX = "brq"
-BRIDGE_FS = "/sys/devices/virtual/net/"
+# NOTE(toabctl): Don't use /sys/devices/virtual/net here because not all tap
+# devices are listed here (i.e. when using Xen)
+BRIDGE_FS = "/sys/class/net/"
 BRIDGE_NAME_PLACEHOLDER = "bridge_name"
 BRIDGE_INTERFACES_FS = BRIDGE_FS + BRIDGE_NAME_PLACEHOLDER + "/brif/"
 DEVICE_NAME_PLACEHOLDER = "device_name"
@@ -625,7 +627,8 @@ class LinuxBridgeManager:
         for mac, ip in ports:
             if mac != constants.FLOODING_ENTRY[0]:
                 self.add_fdb_ip_entry(mac, ip, interface)
-                self.add_fdb_bridge_entry(mac, agent_ip, interface)
+                self.add_fdb_bridge_entry(mac, agent_ip, interface,
+                                          operation="replace")
             elif self.vxlan_mode == lconst.VXLAN_UCAST:
                 if self.fdb_bridge_entry_exists(mac, interface):
                     self.add_fdb_bridge_entry(mac, agent_ip, interface,

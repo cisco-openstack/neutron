@@ -190,7 +190,7 @@ class _TestModelsMigrations(test_migrations.ModelsMigrationsSync):
 
     def test_models_sync(self):
         # drop all tables after a test run
-        self.addCleanup(self._cleanup)
+        # self.addCleanup(self._cleanup)
 
         # run migration scripts
         self.db_sync(self.get_engine())

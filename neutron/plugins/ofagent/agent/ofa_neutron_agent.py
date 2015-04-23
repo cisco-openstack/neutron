@@ -1,5 +1,5 @@
-# Copyright (C) 2014 VA Linux Systems Japan K.K.
-# Copyright (C) 2014 YAMAMOTO Takashi <yamamoto at valinux co jp>
+# Copyright (C) 2014,2015 VA Linux Systems Japan K.K.
+# Copyright (C) 2014,2015 YAMAMOTO Takashi <yamamoto at valinux co jp>
 # Copyright (C) 2014 Fumihiko Kakuma <kakuma at valinux co jp>
 # All Rights Reserved.
 #
@@ -26,6 +26,7 @@ import netaddr
 from oslo.config import cfg
 from ryu.app.ofctl import api as ryu_api
 from ryu.base import app_manager
+import ryu.cfg as ryu_cfg
 from ryu.controller import handler
 from ryu.controller import ofp_event
 from ryu.lib import hub
@@ -108,12 +109,12 @@ class Bridge(flows.OFAgentIntegrationBridge, ovs_lib.OVSBridge):
                   protocols='OpenFlow13',
                   retry_max=cfg.CONF.AGENT.get_datapath_retry_times):
         if not controller_names:
-            host = cfg.CONF.ofp_listen_host
+            host = ryu_cfg.CONF.ofp_listen_host
             if not host:
                 # 127.0.0.1 is a default for agent style of controller
                 host = '127.0.0.1'
-            controller_names = ["tcp:%s:%d" % (host,
-                                               cfg.CONF.ofp_tcp_listen_port)]
+            controller_names = ["tcp:%s:%d" %
+                                (host, ryu_cfg.CONF.ofp_tcp_listen_port)]
         try:
             self.set_protocols(protocols)
             self.set_controller(controller_names)
@@ -407,6 +408,9 @@ class OFANeutronAgent(n_rpc.RpcCallback,
 
     def del_fdb_flow(self, br, port_info, remote_ip, lvm, ofport):
         if port_info == n_const.FLOODING_ENTRY:
+            if ofport not in lvm.tun_ofports:
+                LOG.debug("attempt to remove a non-existent port %s", ofport)
+                return
             lvm.tun_ofports.remove(ofport)
             if len(lvm.tun_ofports) > 0:
                 br.install_tunnel_output(
@@ -581,12 +585,21 @@ class OFANeutronAgent(n_rpc.RpcCallback,
             return
         self.int_br.local_out_delete_port(lvm.vlan, port.vif_mac)
 
-    def port_dead(self, port):
-        """Once a port has no binding, put it on the "dead vlan".
+    def port_dead(self, port, net_uuid=None):
+        """Try to stop forwarding on the port.
 
-        :param port: a ovs_lib.VifPort object.
+        :param port: a ports.OFPort object.
+        :param net_uuid: network uuid to which the port belongs to.
+                         None if unknown.
         """
-        pass
+        self.int_br.check_in_port_delete_port(port.ofport)
+        if port.vif_mac is None:
+            return
+        if net_uuid is None:
+            return
+        lvm = self.local_vlan_map.get(net_uuid)
+        if lvm is not None:
+            self.int_br.local_out_delete_port(lvm.vlan, port.vif_mac)
 
     def setup_integration_br(self):
         """Setup the integration bridge.
@@ -717,7 +730,7 @@ class OFANeutronAgent(n_rpc.RpcCallback,
                 self.port_bound(vif_port, network_id, network_type,
                                 physical_network, segmentation_id)
             else:
-                self.port_dead(vif_port)
+                self.port_dead(vif_port, network_id)
         else:
             LOG.debug("No VIF port for port %s defined on agent.", port_id)
 

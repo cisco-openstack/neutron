@@ -21,6 +21,7 @@ from neutron.common import exceptions as exc
 from neutron.extensions import multiprovidernet as mpnet
 from neutron.extensions import portbindings
 from neutron.extensions import providernet as provider
+from neutron.extensions import vlantransparent
 from neutron.openstack.common import log
 from neutron.plugins.ml2.common import exceptions as ml2_exc
 from neutron.plugins.ml2 import db
@@ -274,6 +275,22 @@ class MechanismManager(stevedore.named.NamedExtensionManager):
             self.native_bulk_support &= getattr(driver.obj,
                                                 'native_bulk_support', True)
 
+    def _check_vlan_transparency(self, context):
+        """Helper method for checking vlan transparecncy support.
+
+        :param context: context parameter to pass to each method call
+        :raises: neutron.extensions.vlantransparent.
+        VlanTransparencyDriverError if any mechanism driver doesn't
+        support vlan transparency.
+        """
+        if context.current['vlan_transparent'] is None:
+            return
+
+        if context.current['vlan_transparent']:
+            for driver in self.ordered_mech_drivers:
+                if not driver.obj.check_vlan_transparency(context):
+                    raise vlantransparent.VlanTransparencyDriverError()
+
     def _call_on_drivers(self, method_name, context,
                          continue_on_failure=False):
         """Helper method for calling a method across all mechanism drivers.
@@ -313,6 +330,7 @@ class MechanismManager(stevedore.named.NamedExtensionManager):
         to the caller, triggering a rollback. There is no guarantee
         that all mechanism drivers are called in this case.
         """
+        self._check_vlan_transparency(context)
         self._call_on_drivers("create_network_precommit", context)
 
     def create_network_postcommit(self, context):

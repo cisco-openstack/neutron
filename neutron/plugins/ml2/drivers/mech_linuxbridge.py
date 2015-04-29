@@ -55,3 +55,7 @@ class LinuxbridgeMechanismDriver(mech_agent.SimpleAgentMechanismDriverBase):
             return segment[api.PHYSICAL_NETWORK] in mappings
         else:
             return False
+
+    def check_vlan_transparency(self, context):
+        """Linuxbridge driver vlan transparency support."""
+        return True

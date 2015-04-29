@@ -800,6 +800,7 @@ class TestL3NatTestCase(L3NatTest,
                 'admin_state_up': True,
                 'tenant_id': '',
                 'port_security_enabled': False,
+                'vlan_transparent': None,
                 'shared': False,
                 'id': mock.ANY
             }

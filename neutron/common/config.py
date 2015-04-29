@@ -117,6 +117,9 @@ core_opts = [
     cfg.IntOpt('send_events_interval', default=2,
                help=_('Number of seconds between sending events to nova if '
                       'there are any events to send.')),
+    cfg.BoolOpt('vlan_transparent', default=False,
+                help=_('If True, then allow plugins that support it to '
+                       'create VLAN transparent networks.')),
 ]
 
 core_cli_opts = [

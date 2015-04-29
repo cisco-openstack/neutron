@@ -825,6 +825,12 @@ class NeutronDbPluginV2(neutron_plugin_base_v2.NeutronPluginBaseV2,
                'shared': network['shared'],
                'subnets': [subnet['id']
                            for subnet in network['subnets']]}
+        # TODO(pritesh): Move vlan_transparent to the extension module.
+        # vlan_transparent here is only added if the vlantransparent
+        # extension is enabled.
+        if ('vlan_transparent' in network and network['vlan_transparent'] !=
+            attributes.ATTR_NOT_SPECIFIED):
+            res['vlan_transparent'] = network['vlan_transparent']
         # Call auxiliary extend functions, if any
         if process_extensions:
             self._apply_dict_extend_functions(
@@ -911,6 +917,12 @@ class NeutronDbPluginV2(neutron_plugin_base_v2.NeutronPluginBaseV2,
                     'admin_state_up': n['admin_state_up'],
                     'shared': n['shared'],
                     'status': n.get('status', constants.NET_STATUS_ACTIVE)}
+            # TODO(pritesh): Move vlan_transparent to the extension module.
+            # vlan_transparent here is only added if the vlantransparent
+            # extension is enabled.
+            if ('vlan_transparent' in n and n['vlan_transparent'] !=
+                attributes.ATTR_NOT_SPECIFIED):
+                args['vlan_transparent'] = n['vlan_transparent']
             network = models_v2.Network(**args)
             context.session.add(network)
         return self._make_network_dict(network, process_extensions=False)

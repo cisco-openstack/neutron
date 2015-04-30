@@ -1,5 +1,5 @@
 [gerrit]
-host=review.openstack.org
+host=review.gerrithub.io
 port=29418
-project=openstack/neutron.git
-defaultbranch=stable/juno
+project=cisco-openstack/neutron.git
+defaultbranch=staging/juno-mercury

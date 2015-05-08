@@ -43,7 +43,7 @@ from neutron.common import utils as common_utils
 from neutron import context as n_context
 from neutron import manager
 from neutron.openstack.common import excutils
-from neutron.openstack.common.gettextutils import _LW
+from neutron.openstack.common.gettextutils import _LE, _LW
 from neutron.openstack.common import importutils
 from neutron.openstack.common import log as logging
 from neutron.openstack.common import loopingcall
@@ -1860,12 +1860,14 @@ class L3NATAgent(firewall_l3_agent.FWaaSL3AgentRpcCallback,
                 continue
 
             try:
-                self._process_routers([router])
-            except Exception:
-                msg = _("Failed to process router '%s'")
-                LOG.exception(msg, update.id)
-                self.fullsync = True
-                continue
+                self._process_router_if_compatible(router)
+            except n_exc.RouterNotCompatibleWithAgent as e:
+                LOG.exception(e.msg)
+                # Was the router previously handled by this agent?
+                if router['id'] in self.router_info:
+                    LOG.error(_LE("Removing incompatible router '%s'"),
+                              router['id'])
+                    self._router_removed(router['id'])
             LOG.debug("Finished a router update for %s", update.id)
             rp.fetched_and_processed(update.timestamp)
 

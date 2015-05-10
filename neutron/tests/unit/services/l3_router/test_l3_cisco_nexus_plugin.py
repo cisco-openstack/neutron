@@ -126,12 +126,6 @@ class TestCiscoNexusL3Plugin(test_db_plugin.NeutronDbPluginV2TestCase,
         self.assertTrue(self._check_xml_keywords(['no', 'vlan'],
             driver._edit_config.mock_calls[5][2]['config']))
 
-    def test_add_router_interface_excep_noswitch(self):
-        self.nexus_patch.stop()
-        self.assertRaises(cexc.NoNexusSviSwitch,
-                          self.plugin.add_router_interface,
-                          self.context, ROUTER, self.interface_info)
-
     def test_add_router_interface_excep_noportid(self):
         self.interface_info['port_id'] = 'Invalid'
         self.assertRaises(cexc.PortIdForNexusSvi,

@@ -914,7 +914,7 @@ class TestCiscoPortsV2(CiscoML2MechanismTestCase,
         """
         self.mock_segments_to_bind.return_value = [VXLAN_SEGMENT]
 
-        expected_dynamic_segment = {api.SEGMENTATION_ID: VLAN_START + 1,
+        expected_dynamic_segment = {api.SEGMENTATION_ID: mock.ANY,
                                     api.PROVIDER_SEGMENT: False,
                                     api.PHYSICAL_NETWORK: PHYS_NET,
                                     api.ID: mock.ANY,

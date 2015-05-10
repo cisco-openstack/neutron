@@ -13,6 +13,8 @@
 #    License for the specific language governing permissions and limitations
 #    under the License.
 
+import random
+
 from oslo.db import exception as db_exc
 
 from neutron.common import exceptions as exc
@@ -107,12 +109,13 @@ class TypeDriverHelper(api.TypeDriver):
                       filter_by(allocated=False, **filters))
 
             # Selected segment can be allocated before update by someone else,
-            alloc = select.first()
+            allocs = select.limit(IDPOOL_SELECT_SIZE).all()
 
-            if not alloc:
+            if not allocs:
                 # No resource available
                 return
 
+            alloc = random.choice(allocs)
             raw_segment = dict((k, alloc[k]) for k in self.primary_keys)
             LOG.debug("%(type)s segment allocate from pool "
                       "started with %(segment)s ",

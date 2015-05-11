@@ -41,6 +41,7 @@ from neutron.db import db_base_plugin_v2
 from neutron.db import models_v2
 from neutron import manager
 from neutron.tests import base
+from neutron.tests import tools
 from neutron.tests.unit.api import test_extensions
 from neutron.tests.unit import testlib_api
 
@@ -93,14 +94,7 @@ class NeutronDbPluginV2TestCase(testlib_api.WebTestCase):
         extensions.PluginAwareExtensionManager._instance = None
         # Save the attributes map in case the plugin will alter it
         # loading extensions
-        # Note(salvatore-orlando): shallow copy is not good enough in
-        # this case, but copy.deepcopy does not seem to work, since it
-        # causes test failures
-        self._attribute_map_bk = {}
-        for item in attributes.RESOURCE_ATTRIBUTE_MAP:
-            self._attribute_map_bk[item] = (attributes.
-                                            RESOURCE_ATTRIBUTE_MAP[item].
-                                            copy())
+        self.useFixture(tools.AttributeMapMemento())
         self._tenant_id = 'test-tenant'
 
         if not plugin:
@@ -162,8 +156,6 @@ class NeutronDbPluginV2TestCase(testlib_api.WebTestCase):
         self._skip_native_pagination = None
         self._skip_native_sortin = None
         self.ext_api = None
-        # Restore the original attribute map
-        attributes.RESOURCE_ATTRIBUTE_MAP = self._attribute_map_bk
         super(NeutronDbPluginV2TestCase, self).tearDown()
 
     def setup_config(self):
@@ -2729,6 +2721,29 @@ class TestNetworksV2(NeutronDbPluginV2TestCase):
             if v[2] == webob.exc.HTTPCreated.code:
                 res = self.deserialize(self.fmt, req)
                 self.assertEqual(res['network']['admin_state_up'], v[1])
+
+    def test_get_user_allocation_for_dhcp_port_returns_none(self):
+        plugin = manager.NeutronManager.get_plugin()
+        if not hasattr(plugin, '_subnet_get_user_allocation'):
+            return
+        with contextlib.nested(
+            self.network(),
+            self.network()
+        ) as (net, net1):
+            with contextlib.nested(
+                self.subnet(network=net, cidr='10.0.0.0/24'),
+                self.subnet(network=net1, cidr='10.0.1.0/24')
+            ) as (subnet, subnet1):
+                with contextlib.nested(
+                    self.port(subnet=subnet, device_owner='network:dhcp'),
+                    self.port(subnet=subnet1)
+                ) as (p, p2):
+                    # check that user allocations on another network don't
+                    # affect _subnet_get_user_allocation method
+                    res = plugin._subnet_get_user_allocation(
+                        context.get_admin_context(),
+                        subnet['subnet']['id'])
+                    self.assertIsNone(res)
 
 
 class TestSubnetsV2(NeutronDbPluginV2TestCase):
@@ -5296,6 +5311,21 @@ class TestSubnetPoolsV2(NeutronDbPluginV2TestCase):
             res = req.get_response(self.api)
             # Assert error
             self.assertEqual(res.status_int, 409)
+
+    def test_allocate_any_ipv4_subnet_ipv6_pool(self):
+        with self.network() as network:
+            sp = self._test_create_subnetpool(['2001:db8:1:2::/63'],
+                                              tenant_id=self._tenant_id,
+                                              name=self._POOL_NAME)
+
+            # Request a specific subnet allocation
+            data = {'subnet': {'network_id': network['network']['id'],
+                               'subnetpool_id': sp['subnetpool']['id'],
+                               'ip_version': 4,
+                               'tenant_id': network['network']['tenant_id']}}
+            req = self.new_create_request('subnets', data)
+            res = req.get_response(self.api)
+            self.assertEqual(res.status_int, 400)
 
 
 class DbModelTestCase(base.BaseTestCase):

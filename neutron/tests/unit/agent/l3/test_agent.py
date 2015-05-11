@@ -13,7 +13,6 @@
 #    License for the specific language governing permissions and limitations
 #    under the License.
 
-import contextlib
 import copy
 
 import eventlet
@@ -1200,13 +1199,11 @@ class TestBasicRouterOperations(BasicRouterOperationsFramework):
         ri.fip_ns = agent.get_fip_ns(ext_gw_port['network_id'])
         ri.dist_fip_count = 0
         ri.fip_ns.subscribe = mock.Mock()
+        ri.fip_ns.agent_router_gateway = mock.Mock()
 
-        with contextlib.nested(mock.patch.object(ri,
-                                                 'get_floating_ips'),
-                               mock.patch.object(
-                                   ri, 'get_floating_agent_gw_interface')
-                               ) as (fips,
-                                     fip_gw_port):
+        with mock.patch.object(ri, 'get_floating_ips') as fips,\
+                mock.patch.object(ri, 'get_floating_agent_gw_interface'
+                                  ) as fip_gw_port:
             fips.return_value = fake_floatingips
             fip_gw_port.return_value = agent_gateway_port[0]
             ri.create_dvr_fip_interfaces(ext_gw_port)
@@ -1214,6 +1211,56 @@ class TestBasicRouterOperations(BasicRouterOperationsFramework):
             self.assertTrue(fips.called)
             self.assertEqual(ri.fip_ns.agent_gateway_port,
                              agent_gateway_port[0])
+            self.assertTrue(ri.rtr_fip_subnet)
+
+    @mock.patch.object(lla.LinkLocalAllocator, '_write')
+    def test_create_dvr_fip_interfaces_for_restart_l3agent_case(self,
+                                                                lla_write):
+        fake_floatingips = {'floatingips': [
+            {'id': _uuid(),
+             'floating_ip_address': '20.0.0.3',
+             'fixed_ip_address': '192.168.0.1',
+             'floating_network_id': _uuid(),
+             'port_id': _uuid(),
+             'host': HOSTNAME}]}
+        agent_gateway_port = (
+            [{'fixed_ips': [
+                {'ip_address': '20.0.0.30',
+                 'prefixlen': 24,
+                 'subnet_id': 'subnet_id'}],
+             'subnets': [
+                 {'id': 'subnet_id',
+                  'gateway_ip': '20.0.0.1'}],
+             'id': _uuid(),
+             'network_id': 'fake_network_id',
+             'mac_address': 'ca:fe:de:ad:be:ef'}]
+        )
+
+        router = prepare_router_data(enable_snat=True)
+        router[l3_constants.FLOATINGIP_KEY] = fake_floatingips['floatingips']
+        router[l3_constants.FLOATINGIP_AGENT_INTF_KEY] = agent_gateway_port
+        router['distributed'] = True
+        agent = l3_agent.L3NATAgent(HOSTNAME, self.conf)
+        ri = dvr_router.DvrRouter(
+            agent, HOSTNAME, router['id'], router, **self.ri_kwargs)
+        ext_gw_port = ri.router.get('gw_port')
+        ri.fip_ns = agent.get_fip_ns(ext_gw_port['network_id'])
+        ri.fip_ns.subscribe = mock.Mock(return_value=True)
+        ri.fip_ns.agent_router_gateway = mock.Mock()
+        ri.rtr_fip_subnet = None
+        ri.dist_fip_count = 1
+
+        with mock.patch.object(ri, 'get_floating_ips') as fips,\
+                mock.patch.object(ri, 'get_floating_agent_gw_interface'
+                                  ) as fip_gw_port:
+            fips.return_value = fake_floatingips
+            fip_gw_port.return_value = agent_gateway_port[0]
+            ri.create_dvr_fip_interfaces(ext_gw_port)
+            self.assertTrue(fip_gw_port.called)
+            self.assertTrue(fips.called)
+            self.assertEqual(ri.fip_ns.agent_gateway_port,
+                             agent_gateway_port[0])
+            self.assertTrue(ri.rtr_fip_subnet)
 
     def test_process_router_cent_floating_ip_add(self):
         fake_floatingips = {'floatingips': [
@@ -1401,7 +1448,8 @@ class TestBasicRouterOperations(BasicRouterOperationsFramework):
                           service=process,
                           default_cmd_callback=mock.ANY,
                           namespace=ri.ns_name,
-                          conf=mock.ANY)]
+                          conf=mock.ANY,
+                          run_as_root=True)]
 
     def _process_router_ipv6_subnet_added(
             self, router, ipv6_subnet_modes=None):
@@ -1795,18 +1843,14 @@ class TestBasicRouterOperations(BasicRouterOperationsFramework):
         self.assertEqual(len(internal_ports), 1)
         internal_port = internal_ports[0]
 
-        with contextlib.nested(mock.patch.object(ri,
-                                                 'internal_network_removed'),
-                               mock.patch.object(ri,
-                                                 'internal_network_added'),
-                               mock.patch.object(ri,
-                                                 'external_gateway_removed'),
-                               mock.patch.object(ri,
-                                                 'external_gateway_added')
-                               ) as (internal_network_removed,
-                                     internal_network_added,
-                                     external_gateway_removed,
-                                     external_gateway_added):
+        with mock.patch.object(ri, 'internal_network_removed'
+                               ) as internal_network_removed,\
+                mock.patch.object(ri, 'internal_network_added'
+                                  ) as internal_network_added,\
+                mock.patch.object(ri, 'external_gateway_removed'
+                                  ) as external_gateway_removed,\
+                mock.patch.object(ri, 'external_gateway_added'
+                                  ) as external_gateway_added:
 
             ri.process(agent)
 
@@ -1886,6 +1930,7 @@ class TestBasicRouterOperations(BasicRouterOperationsFramework):
         self.mock_ip.del_veth.assert_called_once_with('rfp-aaaa')
 
     def test_destroy_router_namespace_skips_ns_removal(self):
+        self.conf.set_override('router_delete_namespaces', False)
         agent = l3_agent.L3NATAgent(HOSTNAME, self.conf)
         ns = namespaces.Namespace(
             'qrouter-bar', self.conf, agent.driver, agent.use_ipv6)
@@ -1894,7 +1939,6 @@ class TestBasicRouterOperations(BasicRouterOperationsFramework):
         self.assertEqual(self.mock_ip.netns.delete.call_count, 0)
 
     def test_destroy_router_namespace_removes_ns(self):
-        self.conf.set_override('router_delete_namespaces', True)
         agent = l3_agent.L3NATAgent(HOSTNAME, self.conf)
         ns = namespaces.Namespace(
             'qrouter-bar', self.conf, agent.driver, agent.use_ipv6)
@@ -2094,7 +2138,6 @@ class TestBasicRouterOperations(BasicRouterOperationsFramework):
                                 other_namespaces,
                                 mock_snat_ns,
                                 mock_router_ns):
-        self.conf.set_override('router_delete_namespaces', True)
 
         good_namespace_list = [namespaces.NS_PREFIX + r['id']
                                for r in router_list]
@@ -2226,7 +2269,6 @@ class TestBasicRouterOperations(BasicRouterOperationsFramework):
 
     def _test_external_gateway_removed_ext_gw_port_and_fip(self, fip_ns=False):
         self.conf.set_override('state_path', '/tmp')
-        self.conf.set_override('router_delete_namespaces', True)
 
         agent = l3_agent.L3NATAgent(HOSTNAME, self.conf)
         agent.conf.agent_mode = 'dvr_snat'

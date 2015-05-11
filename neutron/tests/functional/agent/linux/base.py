@@ -14,11 +14,8 @@
 
 import testscenarios
 
-from neutron.agent.linux import ip_lib
 from neutron.tests import base as tests_base
-from neutron.tests.common import machine_fixtures
-from neutron.tests.common import net_helpers
-from neutron.tests.functional import base as functional_base
+from neutron.tests.functional import base
 
 
 MARK_VALUE = '0x1'
@@ -33,19 +30,10 @@ ICMP_BLOCK_RULE = '-p icmp -j DROP'
 get_rand_name = tests_base.get_rand_name
 
 
-class BaseLinuxTestCase(functional_base.BaseSudoTestCase):
-
-    def _create_namespace(self, prefix=net_helpers.NS_PREFIX):
-        return self.useFixture(net_helpers.NamespaceFixture(prefix)).ip_wrapper
-
-    def create_veth(self):
-        return self.useFixture(net_helpers.VethFixture()).ports
-
-
 # Regarding MRO, it goes BaseOVSLinuxTestCase, WithScenarios,
-# BaseLinuxTestCase, ..., UnitTest, object. setUp is not dfined in
-# WithScenarios, so it will correctly be found in BaseLinuxTestCase.
-class BaseOVSLinuxTestCase(testscenarios.WithScenarios, BaseLinuxTestCase):
+# BaseSudoTestCase, ..., UnitTest, object. setUp is not dfined in
+# WithScenarios, so it will correctly be found in BaseSudoTestCase.
+class BaseOVSLinuxTestCase(testscenarios.WithScenarios, base.BaseSudoTestCase):
     scenarios = [
         ('vsctl', dict(ovsdb_interface='vsctl')),
         ('native', dict(ovsdb_interface='native')),
@@ -54,14 +42,3 @@ class BaseOVSLinuxTestCase(testscenarios.WithScenarios, BaseLinuxTestCase):
     def setUp(self):
         super(BaseOVSLinuxTestCase, self).setUp()
         self.config(group='OVS', ovsdb_interface=self.ovsdb_interface)
-
-
-class BaseIPVethTestCase(functional_base.BaseSudoTestCase):
-
-    def prepare_veth_pairs(self):
-        bridge = self.useFixture(net_helpers.VethBridgeFixture()).bridge
-        machines = self.useFixture(
-            machine_fixtures.PeerMachines(bridge)).machines
-        self.SRC_ADDRESS = machines[0].ip
-        self.DST_ADDRESS = machines[1].ip
-        return [ip_lib.IPWrapper(m.namespace) for m in machines]

@@ -25,7 +25,6 @@ import fixtures
 from neutron.agent.common import config
 from neutron.agent.linux import ip_lib
 from neutron.agent.linux import utils
-from neutron.tests import tools
 
 CHILD_PROCESS_TIMEOUT = os.environ.get('OS_TEST_CHILD_PROCESS_TIMEOUT', 20)
 CHILD_PROCESS_SLEEP = os.environ.get('OS_TEST_CHILD_PROCESS_SLEEP', 0.5)
@@ -51,15 +50,8 @@ class RecursivePermDirFixture(fixtures.Fixture):
             perms = os.stat(current_directory).st_mode
             if perms & self.least_perms != self.least_perms:
                 os.chmod(current_directory, perms | self.least_perms)
-                self.addCleanup(self.safe_chmod, current_directory, perms)
             previous_directory = current_directory
             current_directory = os.path.dirname(current_directory)
-
-    def safe_chmod(self, path, mode):
-        try:
-            os.chmod(path, mode)
-        except OSError:
-            pass
 
 
 def get_free_namespace_port(tcp=True, namespace=None):
@@ -97,29 +89,6 @@ def _get_source_ports_from_ss_output(output):
 def get_unused_port(used, start=1024, end=65535):
     candidates = set(range(start, end + 1))
     return random.choice(list(candidates - used))
-
-
-class Pinger(object):
-    def __init__(self, namespace, timeout=1, max_attempts=1):
-        self.namespace = namespace
-        self._timeout = timeout
-        self._max_attempts = max_attempts
-
-    def _ping_destination(self, dest_address):
-        self.namespace.netns.execute(['ping', '-c', self._max_attempts,
-                                      '-W', self._timeout, dest_address])
-
-    def assert_ping(self, dst_ip):
-        self._ping_destination(dst_ip)
-
-    def assert_no_ping(self, dst_ip):
-        try:
-            self._ping_destination(dst_ip)
-            tools.fail("destination ip %(dst_ip)s is replying to ping"
-                       "from namespace %(ns)s, but it shouldn't" %
-                       {'ns': self.namespace.namespace, 'dst_ip': dst_ip})
-        except RuntimeError:
-            pass
 
 
 class RootHelperProcess(subprocess.Popen):

@@ -15,14 +15,14 @@
 
 from neutron.cmd.sanity import checks
 from neutron.plugins.openvswitch.agent import ovs_neutron_agent as ovsagt
+from neutron.tests.common import machine_fixtures
 from neutron.tests.common import net_helpers
-from neutron.tests.functional.agent.linux import base
-from neutron.tests.functional.agent.linux import helpers
 from neutron.tests.functional.agent import test_ovs_lib
+from neutron.tests.functional import base
 
 
 class ARPSpoofTestCase(test_ovs_lib.OVSBridgeTestBase,
-                       base.BaseIPVethTestCase):
+                       base.BaseSudoTestCase):
 
     def setUp(self):
         if not checks.arp_header_match_supported():
@@ -33,13 +33,16 @@ class ARPSpoofTestCase(test_ovs_lib.OVSBridgeTestBase,
         super(ARPSpoofTestCase, self).setUp()
         self.src_addr = '192.168.0.1'
         self.dst_addr = '192.168.0.2'
-        self.src_ns = self._create_namespace()
-        self.dst_ns = self._create_namespace()
-        self.pinger = helpers.Pinger(self.src_ns, max_attempts=2)
+        self.src_namespace = self.useFixture(
+            net_helpers.NamespaceFixture()).name
+        self.dst_namespace = self.useFixture(
+            net_helpers.NamespaceFixture()).name
+        self.pinger = machine_fixtures.Pinger(
+            self.src_namespace, max_attempts=2)
         self.src_p = self.useFixture(
-            net_helpers.OVSPortFixture(self.br, self.src_ns.namespace)).port
+            net_helpers.OVSPortFixture(self.br, self.src_namespace)).port
         self.dst_p = self.useFixture(
-            net_helpers.OVSPortFixture(self.br, self.dst_ns.namespace)).port
+            net_helpers.OVSPortFixture(self.br, self.dst_namespace)).port
         # wait to add IPs until after anti-spoof rules to ensure ARP doesn't
         # happen before
 
@@ -48,6 +51,17 @@ class ARPSpoofTestCase(test_ovs_lib.OVSBridgeTestBase,
         self._setup_arp_spoof_for_port(self.dst_p.name, [self.dst_addr])
         self.src_p.addr.add('%s/24' % self.src_addr)
         self.dst_p.addr.add('%s/24' % self.dst_addr)
+        self.pinger.assert_ping(self.dst_addr)
+
+    def test_arp_spoof_doesnt_block_ipv6(self):
+        self.src_addr = '2000::1'
+        self.dst_addr = '2000::2'
+        self._setup_arp_spoof_for_port(self.src_p.name, [self.src_addr])
+        self._setup_arp_spoof_for_port(self.dst_p.name, [self.dst_addr])
+        self.src_p.addr.add('%s/64' % self.src_addr)
+        self.dst_p.addr.add('%s/64' % self.dst_addr)
+        # IPv6 addresses seem to take longer to initialize
+        self.pinger._max_attempts = 4
         self.pinger.assert_ping(self.dst_addr)
 
     def test_arp_spoof_blocks_response(self):

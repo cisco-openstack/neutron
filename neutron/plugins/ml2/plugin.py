@@ -41,6 +41,7 @@ from neutron.callbacks import resources
 from neutron.common import constants as const
 from neutron.common import exceptions as exc
 from neutron.common import ipv6_utils
+from neutron.common import log as neutron_log
 from neutron.common import rpc as n_rpc
 from neutron.common import topics
 from neutron.common import utils
@@ -166,6 +167,7 @@ class Ml2Plugin(db_base_plugin_v2.NeutronDbPluginV2,
         )
         self.start_periodic_dhcp_agent_status_check()
 
+    @neutron_log.log
     def start_rpc_listeners(self):
         """Start the RPC loop to let the plugin communicate with agents."""
         self.topic = topics.PLUGIN
@@ -1462,17 +1464,18 @@ class Ml2Plugin(db_base_plugin_v2.NeutronDbPluginV2,
 
         return ports
 
-    def _device_to_port_id(self, device):
+    @staticmethod
+    def _device_to_port_id(device):
         # REVISIT(rkukura): Consider calling into MechanismDrivers to
         # process device names, or having MechanismDrivers supply list
         # of device prefixes to strip.
-        if device.startswith(const.TAP_DEVICE_PREFIX):
-            return device[len(const.TAP_DEVICE_PREFIX):]
-        else:
-            # REVISIT(irenab): Consider calling into bound MD to
-            # handle the get_device_details RPC, then remove the 'else' clause
-            if not uuidutils.is_uuid_like(device):
-                port = db.get_port_from_device_mac(device)
-                if port:
-                    return port.id
+        for prefix in const.INTERFACE_PREFIXES:
+            if device.startswith(prefix):
+                return device[len(prefix):]
+        # REVISIT(irenab): Consider calling into bound MD to
+        # handle the get_device_details RPC
+        if not uuidutils.is_uuid_like(device):
+            port = db.get_port_from_device_mac(device)
+            if port:
+                return port.id
         return device

@@ -24,6 +24,7 @@ from neutron.agent.l3 import router_info as router
 from neutron.agent.linux import ip_lib
 from neutron.agent.linux import iptables_manager
 from neutron.common import constants as l3_constants
+from neutron.common import exceptions
 from neutron.common import utils as common_utils
 from neutron.i18n import _LE
 
@@ -45,6 +46,7 @@ class DvrRouter(router.RouterInfo):
         self.rtr_fip_subnet = None
         self.dist_fip_count = None
         self.snat_namespace = None
+        self.fip_ns = None
 
     def get_floating_ips(self):
         """Filter Floating IPs to be hosted on this agent."""
@@ -246,6 +248,14 @@ class DvrRouter(router.RouterInfo):
             snat_idx = net.value
         return snat_idx
 
+    def _delete_gateway_device_if_exists(self, ns_ip_device, gw_ip_addr,
+                                         snat_idx):
+        try:
+            ns_ip_device.route.delete_gateway(gw_ip_addr,
+                                        table=snat_idx)
+        except exceptions.DeviceNotFoundError:
+            pass
+
     def _snat_redirect_modify(self, gateway, sn_port, sn_int, is_add):
         """Adds or removes rules and routes for SNAT redirection."""
         try:
@@ -271,8 +281,9 @@ class DvrRouter(router.RouterInfo):
                                 ['sysctl', '-w',
                                  'net.ipv4.conf.%s.send_redirects=0' % sn_int])
                         else:
-                            ns_ipd.route.delete_gateway(gw_ip_addr,
-                                                        table=snat_idx)
+                            self._delete_gateway_device_if_exists(ns_ipd,
+                                                                  gw_ip_addr,
+                                                                  snat_idx)
                             ns_ipr.rule.delete(sn_port_cidr, snat_idx,
                                                snat_idx)
                         break
@@ -498,6 +509,7 @@ class DvrRouter(router.RouterInfo):
             ex_gw_port['network_id'])
         LOG.debug("FloatingIP agent gateway port received from the plugin: "
                   "%s", fip_agent_port)
+        is_first = False
         if floating_ips:
             is_first = self.fip_ns.subscribe(self.router_id)
             if is_first and fip_agent_port:
@@ -507,7 +519,7 @@ class DvrRouter(router.RouterInfo):
                     self.fip_ns.create_gateway_port(fip_agent_port)
 
         if self.fip_ns.agent_gateway_port and floating_ips:
-            if self.dist_fip_count == 0:
+            if self.dist_fip_count == 0 or is_first:
                 self.fip_ns.create_rtr_2_fip_link(self)
 
                 # kicks the FW Agent to add rules for the IR namespace if

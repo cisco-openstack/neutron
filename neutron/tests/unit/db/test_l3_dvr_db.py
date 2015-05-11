@@ -19,6 +19,7 @@ import mock
 from neutron.common import constants as l3_const
 from neutron.common import exceptions
 from neutron import context
+from neutron.db import common_db_mixin
 from neutron.db import l3_dvr_db
 from neutron import manager
 from neutron.openstack.common import uuidutils
@@ -45,6 +46,19 @@ class L3DvrTestCase(testlib_api.SqlTestCase):
             router['distributed'] = distributed
         result = self._create_router(router)
         self.assertEqual(expected, result.extra_attributes['distributed'])
+
+    def test_router_id_query(self):
+        # need to create an object that has the common db method required
+        class DVRwithCommon(l3_dvr_db.L3_NAT_with_dvr_db_mixin,
+                            common_db_mixin.CommonDbMixin):
+            pass
+        self.mixin = DVRwithCommon()
+        routers = [self._create_router({'name': '%s' % x,
+                                        'admin_state_up': True})
+                   for x in range(10)]
+        expected = [router['id'] for router in routers]
+        router_ids = self.mixin._get_router_ids(self.ctx)
+        self.assertEqual(sorted(expected), sorted(router_ids))
 
     def test_create_router_db_default(self):
         self._test__create_router_db(expected=False)
@@ -144,12 +158,12 @@ class L3DvrTestCase(testlib_api.SqlTestCase):
         router = {'id': 'foo_router_id', 'distributed': True}
         self._test__is_distributed_router(router, True)
 
-    def test_get_agent_gw_ports_exist_for_network(self):
+    def test__get_agent_gw_ports_exist_for_network(self):
         with mock.patch.object(manager.NeutronManager, 'get_plugin') as gp:
             plugin = mock.Mock()
             gp.return_value = plugin
             plugin.get_ports.return_value = []
-            self.mixin.get_agent_gw_ports_exist_for_network(
+            self.mixin._get_agent_gw_ports_exist_for_network(
                 self.ctx, 'network_id', 'host', 'agent_id')
         plugin.get_ports.assert_called_with(self.ctx, {
             'network_id': ['network_id'],
@@ -166,7 +180,7 @@ class L3DvrTestCase(testlib_api.SqlTestCase):
                               self.ctx,
                               port['id'])
 
-    def test_prevent_delete_floatingip_agent_gateway_port(self):
+    def test_prevent__delete_floatingip_agent_gateway_port(self):
         port = {
             'id': 'my_port_id',
             'fixed_ips': mock.ANY,
@@ -195,7 +209,7 @@ class L3DvrTestCase(testlib_api.SqlTestCase):
             mock.patch.object(l3_dvr_db.l3_db.L3_NAT_db_mixin,
                               '_create_gw_port'),
             mock.patch.object(self.mixin,
-                              'create_snat_intf_ports_if_not_exists')
+                              '_create_snat_intf_ports_if_not_exists')
                               ) as (cw, cs):
             self.mixin._create_gw_port(
                 self.ctx, router_id, router_db, mock.ANY,
@@ -208,7 +222,7 @@ class L3DvrTestCase(testlib_api.SqlTestCase):
         routers = self.mixin._build_routers_list(self.ctx, routers, gw_ports)
         self.assertIsNone(routers[0].get('gw_port'))
 
-    def test_clear_unused_fip_agent_gw_port(self):
+    def test__clear_unused_fip_agent_gw_port(self):
         floatingip = {
             'id': _uuid(),
             'fixed_port_id': _uuid(),
@@ -218,22 +232,22 @@ class L3DvrTestCase(testlib_api.SqlTestCase):
             mock.patch.object(l3_dvr_db.l3_db.L3_NAT_db_mixin,
                               '_get_floatingip'),
             mock.patch.object(self.mixin,
-                              'get_vm_port_hostid'),
+                              '_get_vm_port_hostid'),
             mock.patch.object(self.mixin,
-                              'check_fips_availability_on_host_ext_net'),
+                              '_check_fips_availability_on_host_ext_net'),
             mock.patch.object(self.mixin,
-                              'delete_floatingip_agent_gateway_port')
+                              '_delete_floatingip_agent_gateway_port')
                              ) as (gfips, gvm, cfips, dfips):
             gfips.return_value = floatingip
             gvm.return_value = 'my-host'
             cfips.return_value = True
-            self.mixin.clear_unused_fip_agent_gw_port(
+            self.mixin._clear_unused_fip_agent_gw_port(
                 self.ctx, floatingip)
             self.assertTrue(dfips.called)
             self.assertTrue(cfips.called)
             self.assertTrue(gvm.called)
 
-    def test_delete_floatingip_agent_gateway_port(self):
+    def test__delete_floatingip_agent_gateway_port(self):
         port = {
             'id': 'my_port_id',
             'binding:host_id': 'foo_host',
@@ -243,12 +257,12 @@ class L3DvrTestCase(testlib_api.SqlTestCase):
         with contextlib.nested(
             mock.patch.object(manager.NeutronManager, 'get_plugin'),
             mock.patch.object(self.mixin,
-                              'get_vm_port_hostid')) as (gp, vm_host):
+                              '_get_vm_port_hostid')) as (gp, vm_host):
             plugin = mock.Mock()
             gp.return_value = plugin
             plugin.get_ports.return_value = [port]
             vm_host.return_value = 'foo_host'
-            self.mixin.delete_floatingip_agent_gateway_port(
+            self.mixin._delete_floatingip_agent_gateway_port(
                 self.ctx, 'foo_host', 'network_id')
         plugin.get_ports.assert_called_with(self.ctx, filters={
             'network_id': ['network_id'],
@@ -261,7 +275,7 @@ class L3DvrTestCase(testlib_api.SqlTestCase):
             mock.patch.object(l3_dvr_db.l3_db.L3_NAT_db_mixin,
                               '_get_floatingip'),
             mock.patch.object(self.mixin,
-                              'clear_unused_fip_agent_gw_port'),
+                              '_clear_unused_fip_agent_gw_port'),
             mock.patch.object(l3_dvr_db.l3_db.L3_NAT_db_mixin,
                               'delete_floatingip')) as (gf, vf, df):
             gf.return_value = floatingip
@@ -272,7 +286,7 @@ class L3DvrTestCase(testlib_api.SqlTestCase):
         with contextlib.nested(
             mock.patch.object(self.mixin, '_get_floatingip_on_port'),
             mock.patch.object(self.mixin,
-                              'clear_unused_fip_agent_gw_port'),
+                              '_clear_unused_fip_agent_gw_port'),
                               ) as (gf, vf):
             gf.return_value = floatingip
             self.mixin.disassociate_floatingips(
@@ -332,10 +346,10 @@ class L3DvrTestCase(testlib_api.SqlTestCase):
         # NOTE: mock.patch is not needed here since self.mixin is created fresh
         # for each test.  It doesn't work with some methods since the mixin is
         # tested in isolation (e.g. _get_agent_by_type_and_host).
-        self.mixin.get_vm_port_hostid = mock.Mock(return_value=hostid)
+        self.mixin._get_vm_port_hostid = mock.Mock(return_value=hostid)
         self.mixin._get_agent_by_type_and_host = mock.Mock(
             return_value=fipagent)
-        self.mixin.get_fip_sync_interfaces = mock.Mock(
+        self.mixin._get_fip_sync_interfaces = mock.Mock(
             return_value='fip_interface')
         agent = mock.Mock()
         agent.id = fipagent['id']
@@ -353,7 +367,7 @@ class L3DvrTestCase(testlib_api.SqlTestCase):
     def test_floatingip_on_port_with_host(self):
         router, fip = self._floatingip_on_port_test_setup(_uuid())
 
-        self.assertTrue(self.mixin.get_fip_sync_interfaces.called)
+        self.assertTrue(self.mixin._get_fip_sync_interfaces.called)
 
         self.assertIn(l3_const.FLOATINGIP_KEY, router)
         self.assertIn(l3_const.FLOATINGIP_AGENT_INTF_KEY, router)
@@ -376,7 +390,7 @@ class L3DvrTestCase(testlib_api.SqlTestCase):
             mock.patch.object(self.mixin,
                               'get_router'),
             mock.patch.object(self.mixin,
-                              'clear_unused_fip_agent_gw_port'),
+                              '_clear_unused_fip_agent_gw_port'),
             mock.patch.object(l3_dvr_db.l3_db.L3_NAT_db_mixin,
                               '_update_fip_assoc'),
                  ) as (grtr, vf, cf):
@@ -397,9 +411,9 @@ class L3DvrTestCase(testlib_api.SqlTestCase):
             mock.patch.object(self.mixin,
                               'get_router'),
             mock.patch.object(self.mixin,
-                              'get_vm_port_hostid'),
+                              '_get_vm_port_hostid'),
             mock.patch.object(self.mixin,
-                              'clear_unused_fip_agent_gw_port'),
+                              '_clear_unused_fip_agent_gw_port'),
             mock.patch.object(self.mixin,
                               'create_fip_agent_gw_port_if_not_exists'),
             mock.patch.object(l3_dvr_db.l3_db.L3_NAT_db_mixin,

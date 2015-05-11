@@ -13,7 +13,6 @@
 #    License for the specific language governing permissions and limitations
 #    under the License.
 
-import contextlib
 import copy
 import sys
 import uuid
@@ -305,6 +304,11 @@ class TestDhcpAgent(base.BaseTestCase):
                                                     mock.ANY)
                 self.assertEqual(log.call_count, 1)
                 self.assertEqual(expected_sync, schedule_resync.called)
+
+    def test_call_driver_ip_address_generation_failure(self):
+        error = oslo_messaging.RemoteError(
+            exc_type='IpAddressGenerationFailure')
+        self._test_call_driver_failure(exc=error, expected_sync=False)
 
     def test_call_driver_failure(self):
         self._test_call_driver_failure()
@@ -978,12 +982,8 @@ class TestDhcpPluginApiProxy(base.BaseTestCase):
         proxy = dhcp_agent.DhcpPluginApi('foo', ctxt, None)
         proxy.host = 'foo'
 
-        with contextlib.nested(
-            mock.patch.object(proxy.client, 'call'),
-            mock.patch.object(proxy.client, 'prepare'),
-        ) as (
-            rpc_mock, prepare_mock
-        ):
+        with mock.patch.object(proxy.client, 'call') as rpc_mock,\
+                mock.patch.object(proxy.client, 'prepare') as prepare_mock:
             prepare_mock.return_value = proxy.client
             rpc_mock.return_value = kwargs.pop('return_value', [])
 

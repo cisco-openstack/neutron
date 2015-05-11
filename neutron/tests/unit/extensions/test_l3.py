@@ -46,6 +46,7 @@ from neutron import manager
 from neutron.openstack.common import uuidutils
 from neutron.plugins.common import constants as service_constants
 from neutron.tests import base
+from neutron.tests.common import helpers
 from neutron.tests import fake_notifier
 from neutron.tests.unit.api.v2 import test_base
 from neutron.tests.unit.db import test_db_base_plugin_v2
@@ -311,19 +312,6 @@ class TestL3NatAgentSchedulingServicePlugin(TestL3NatServicePlugin,
             cfg.CONF.router_scheduler_driver)
         self.agent_notifiers.update(
             {l3_constants.AGENT_TYPE_L3: l3_rpc_agent_api.L3AgentNotifyAPI()})
-
-
-class L3NATdbonlyMixinTestCase(base.BaseTestCase):
-
-    def setUp(self):
-        super(L3NATdbonlyMixinTestCase, self).setUp()
-        self.mixin = l3_db.L3_NAT_dbonly_mixin()
-
-    def test_build_routers_list_with_gw_port_mismatch(self):
-        routers = [{'gw_port_id': 'foo_gw_port_id', 'id': 'foo_router_id'}]
-        gw_ports = {}
-        routers = self.mixin._build_routers_list(mock.ANY, routers, gw_ports)
-        self.assertIsNone(routers[0].get('gw_port'))
 
 
 class L3NatTestCaseMixin(object):
@@ -883,6 +871,56 @@ class L3NatTestCaseBase(L3NatTestCaseMixin):
                 self.assertNotEqual(fip1['subnet_id'], fip2['subnet_id'])
                 self.assertNotEqual(fip1['ip_address'], fip2['ip_address'])
 
+    def test_router_update_gateway_upon_subnet_create_max_ips_ipv6(self):
+        """Create subnet should not cause excess fixed IPs on router gw
+
+        If a router gateway port has the maximum of one IPv4 and one IPv6
+        fixed, create subnet should not add any more IP addresses to the port
+        (unless this is the subnet is a SLAAC/DHCPv6-stateless subnet in which
+        case the addresses are added automatically)
+
+        """
+        with self.router() as r, self.network() as n:
+            with self.subnet(cidr='10.0.0.0/24', network=n) as s1, (
+                    self.subnet(ip_version=6, cidr='2001:db8::/64',
+                        network=n)) as s2:
+                self._set_net_external(n['network']['id'])
+                self._add_external_gateway_to_router(
+                        r['router']['id'],
+                        n['network']['id'],
+                        ext_ips=[{'subnet_id': s1['subnet']['id']},
+                                 {'subnet_id': s2['subnet']['id']}],
+                        expected_code=exc.HTTPOk.code)
+                res1 = self._show('routers', r['router']['id'])
+                original_fips = (res1['router']['external_gateway_info']
+                                 ['external_fixed_ips'])
+                # Add another IPv4 subnet - a fip SHOULD NOT be added
+                # to the external gateway port as it already has a v4 address
+                self._create_subnet(self.fmt, net_id=n['network']['id'],
+                                    cidr='10.0.1.0/24')
+                res2 = self._show('routers', r['router']['id'])
+                self.assertEqual(original_fips,
+                                 res2['router']['external_gateway_info']
+                                 ['external_fixed_ips'])
+                # Add a SLAAC subnet - a fip from this subnet SHOULD be added
+                # to the external gateway port
+                s3 = self.deserialize(self.fmt,
+                        self._create_subnet(self.fmt,
+                            net_id=n['network']['id'],
+                            ip_version=6, cidr='2001:db8:1::/64',
+                            ipv6_ra_mode=l3_constants.IPV6_SLAAC,
+                            ipv6_address_mode=l3_constants.IPV6_SLAAC))
+                res3 = self._show('routers', r['router']['id'])
+                fips = (res3['router']['external_gateway_info']
+                        ['external_fixed_ips'])
+                fip_subnet_ids = [fip['subnet_id'] for fip in fips]
+                self.assertIn(s1['subnet']['id'], fip_subnet_ids)
+                self.assertIn(s2['subnet']['id'], fip_subnet_ids)
+                self.assertIn(s3['subnet']['id'], fip_subnet_ids)
+                self._remove_external_gateway_from_router(
+                    r['router']['id'],
+                    n['network']['id'])
+
     def _test_router_add_interface_subnet(self, router, subnet, msg=None):
         exp_notifications = ['router.create.start',
                              'router.create.end',
@@ -1370,6 +1408,52 @@ class L3NatTestCaseBase(L3NatTestCaseMixin):
                                               None,
                                               expected_code=exc.
                                               HTTPBadRequest.code)
+
+    def test_router_add_gateway_multiple_subnets_ipv6(self):
+        """Ensure external gateway set doesn't add excess IPs on router gw
+
+        Setting the gateway of a router to an external network with more than
+        one IPv4 and one IPv6 subnet should only add an address from the first
+        IPv4 subnet, an address from the first IPv6-stateful subnet, and an
+        address from each IPv6-stateless (SLAAC and DHCPv6-stateless) subnet
+
+        """
+        with self.router() as r, self.network() as n:
+            with self.subnet(
+                    cidr='10.0.0.0/24', network=n) as s1, (
+                 self.subnet(
+                    cidr='10.0.1.0/24', network=n)) as s2, (
+                 self.subnet(
+                    cidr='2001:db8::/64', network=n,
+                    ip_version=6,
+                    ipv6_ra_mode=l3_constants.IPV6_SLAAC,
+                    ipv6_address_mode=l3_constants.IPV6_SLAAC)) as s3, (
+                 self.subnet(
+                    cidr='2001:db8:1::/64', network=n,
+                    ip_version=6,
+                    ipv6_ra_mode=l3_constants.DHCPV6_STATEFUL,
+                    ipv6_address_mode=l3_constants.DHCPV6_STATEFUL)) as s4, (
+                 self.subnet(
+                    cidr='2001:db8:2::/64', network=n,
+                    ip_version=6,
+                    ipv6_ra_mode=l3_constants.DHCPV6_STATELESS,
+                    ipv6_address_mode=l3_constants.DHCPV6_STATELESS)) as s5:
+                self._set_net_external(n['network']['id'])
+                self._add_external_gateway_to_router(
+                        r['router']['id'],
+                        n['network']['id'])
+                res = self._show('routers', r['router']['id'])
+                fips = (res['router']['external_gateway_info']
+                        ['external_fixed_ips'])
+                fip_subnet_ids = [fip['subnet_id'] for fip in fips]
+                self.assertIn(s1['subnet']['id'], fip_subnet_ids)
+                self.assertNotIn(s2['subnet']['id'], fip_subnet_ids)
+                self.assertIn(s3['subnet']['id'], fip_subnet_ids)
+                self.assertIn(s4['subnet']['id'], fip_subnet_ids)
+                self.assertIn(s5['subnet']['id'], fip_subnet_ids)
+                self._remove_external_gateway_from_router(
+                    r['router']['id'],
+                    n['network']['id'])
 
     def test_router_add_and_remove_gateway(self):
         with self.router() as r:
@@ -2299,6 +2383,14 @@ class L3NatTestCaseBase(L3NatTestCaseMixin):
                                   floating_ip='10.0.0.10',
                                   http_status=exc.HTTPConflict.code)
 
+    def test_router_specify_id_backend(self):
+        plugin = manager.NeutronManager.get_service_plugins()[
+                    service_constants.L3_ROUTER_NAT]
+        router_req = {'router': {'id': _uuid(), 'name': 'router',
+                                 'admin_state_up': True}}
+        result = plugin.create_router(context.Context('', 'foo'), router_req)
+        self.assertEqual(result['id'], router_req['router']['id'])
+
 
 class L3AgentDbTestCaseBase(L3NatTestCaseMixin):
 
@@ -2502,10 +2594,10 @@ class L3NatDBIntAgentSchedulingTestCase(L3BaseForIntTests,
                                self.subnet()) as (r, s1, s2):
             self._set_net_external(s1['subnet']['network_id'])
             l3_rpc_cb = l3_rpc.L3RpcCallback()
-            self._register_one_l3_agent(
+            helpers.register_l3_agent(
                 host='host1',
                 ext_net_id=s1['subnet']['network_id'])
-            self._register_one_l3_agent(
+            helpers.register_l3_agent(
                 host='host2', internal_only=False,
                 ext_net_id=s2['subnet']['network_id'])
             l3_rpc_cb.sync_routers(self.adminContext,
@@ -2529,10 +2621,10 @@ class L3NatDBIntAgentSchedulingTestCase(L3BaseForIntTests,
                                self.subnet()) as (r, s1, s2):
             self._set_net_external(s1['subnet']['network_id'])
             l3_rpc_cb = l3_rpc.L3RpcCallback()
-            self._register_one_l3_agent(
+            helpers.register_l3_agent(
                 host='host1',
                 ext_net_id=s1['subnet']['network_id'])
-            self._register_one_l3_agent(
+            helpers.register_l3_agent(
                 host='host2', internal_only=False,
                 ext_net_id='', ext_bridge='')
             l3_rpc_cb.sync_routers(self.adminContext,
@@ -2573,6 +2665,11 @@ class L3RpcCallbackTestCase(base.BaseTestCase):
             l3_rpc.L3RpcCallback,
             'l3plugin', new_callable=mock.PropertyMock).start()
         self.l3_rpc_cb = l3_rpc.L3RpcCallback()
+
+    def test__ensure_host_set_on_port_host_id_none(self):
+        port = {'id': 'id', portbindings.HOST_ID: 'somehost'}
+        self.l3_rpc_cb._ensure_host_set_on_port(None, None, port)
+        self.assertFalse(self.l3_rpc_cb.plugin.update_port.called)
 
     def test__ensure_host_set_on_port_update_on_concurrent_delete(self):
         port_id = 'foo_port_id'

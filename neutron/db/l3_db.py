@@ -64,7 +64,8 @@ class RouterPort(model_base.BASEV2):
     port_type = sa.Column(sa.String(255))
     port = orm.relationship(
         models_v2.Port,
-        backref=orm.backref('routerport', uselist=False, cascade="all,delete"))
+        backref=orm.backref('routerport', uselist=False, cascade="all,delete"),
+        lazy='joined')
 
 
 class Router(model_base.BASEV2, models_v2.HasId, models_v2.HasTenant):
@@ -989,10 +990,8 @@ class L3_NAT_dbonly_mixin(l3.RouterPluginBase):
             RouterPort.port_type.in_(device_owners)
         )
 
-        # TODO(markmcclain): This is suboptimal but was left to reduce
-        # changeset size since it is late in cycle
-        ports = [rp.port.id for rp in qry]
-        interfaces = self._core_plugin.get_ports(context, {'id': ports})
+        interfaces = [self._core_plugin._make_port_dict(rp.port, None)
+                      for rp in qry]
         if interfaces:
             self._populate_subnet_for_ports(context, interfaces)
         return interfaces

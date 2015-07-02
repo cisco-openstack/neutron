@@ -18,10 +18,10 @@ from oslo_config import cfg
 from oslo_log import log as logging
 import oslo_messaging
 from oslo_messaging import serializer as om_serializer
+from oslo_service import service
 
 from neutron.common import exceptions
 from neutron import context
-from neutron.openstack.common import service
 
 
 LOG = logging.getLogger(__name__)
@@ -130,8 +130,7 @@ class RequestContextSerializer(om_serializer.Serializer):
         tenant_id = rpc_ctxt_dict.pop('tenant_id', None)
         if not tenant_id:
             tenant_id = rpc_ctxt_dict.pop('project_id', None)
-        return context.Context(user_id, tenant_id,
-                               load_admin_roles=False, **rpc_ctxt_dict)
+        return context.Context(user_id, tenant_id, **rpc_ctxt_dict)
 
 
 class Service(service.Service):

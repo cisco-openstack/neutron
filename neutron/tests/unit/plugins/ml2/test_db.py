@@ -14,7 +14,7 @@
 # limitations under the License.
 
 import mock
-
+from oslo_utils import uuidutils
 from sqlalchemy.orm import query
 
 from neutron import context
@@ -22,7 +22,6 @@ from neutron.db import db_base_plugin_v2
 from neutron.db import l3_db
 from neutron.db import models_v2
 from neutron.extensions import portbindings
-from neutron.openstack.common import uuidutils
 from neutron.plugins.ml2 import db as ml2_db
 from neutron.plugins.ml2 import driver_api as api
 from neutron.plugins.ml2 import models
@@ -201,7 +200,8 @@ class Ml2DBTestCase(testlib_api.SqlTestCase):
         self._setup_neutron_network(network_id)
         port = self._setup_neutron_port(network_id, port_id)
 
-        observed_port = ml2_db.get_port_from_device_mac(port['mac_address'])
+        observed_port = ml2_db.get_port_from_device_mac(self.ctx,
+                                                        port['mac_address'])
         self.assertEqual(port_id, observed_port.id)
 
     def test_get_locked_port_and_binding(self):

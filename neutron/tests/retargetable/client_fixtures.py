@@ -68,10 +68,11 @@ class PluginClientFixture(AbstractClientFixture):
     """Targets the Neutron API via the plugin API"""
 
     def __init__(self, plugin_conf):
+        super(PluginClientFixture, self).__init__()
         self.plugin_conf = plugin_conf
 
-    def setUp(self):
-        super(PluginClientFixture, self).setUp()
+    def _setUp(self):
+        super(PluginClientFixture, self)._setUp()
         self.useFixture(testlib_api.SqlFixture())
         self.useFixture(self.plugin_conf)
         self.useFixture(base.PluginFixture(self.plugin_conf.plugin_name))

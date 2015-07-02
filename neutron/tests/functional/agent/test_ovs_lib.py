@@ -118,9 +118,13 @@ class OVSBridgeTestCase(OVSBridgeTestBase):
                          self.br.db_get_val('Controller', self.br.br_name,
                                             'connection_mode'))
 
-    def test_set_fail_mode(self):
+    def test_set_fail_mode_secure(self):
         self.br.set_secure_mode()
         self._assert_br_fail_mode(ovs_lib.FAILMODE_SECURE)
+
+    def test_set_fail_mode_standalone(self):
+        self.br.set_standalone_mode()
+        self._assert_br_fail_mode(ovs_lib.FAILMODE_STANDALONE)
 
     def _assert_br_fail_mode(self, fail_mode):
         self.assertEqual(
@@ -204,6 +208,15 @@ class OVSBridgeTestCase(OVSBridgeTestBase):
         for vif in vif_ports:
             self.assertEqual(self.br.get_vif_port_by_id(vif.vif_id).vif_id,
                              vif.vif_id)
+
+    def test_get_vifs_by_ids(self):
+        for i in range(2):
+            self.create_ovs_port()
+        vif_ports = [self.create_ovs_vif_port() for i in range(3)]
+        by_id = self.br.get_vifs_by_ids([v.vif_id for v in vif_ports])
+        # convert to str for comparison of VifPorts
+        by_id = {vid: str(vport) for vid, vport in by_id.items()}
+        self.assertEqual({v.vif_id: str(v) for v in vif_ports}, by_id)
 
     def test_delete_ports(self):
         # TODO(twilson) I intensely dislike the current delete_ports function

@@ -21,7 +21,7 @@ import six
 from neutron.common import constants
 from neutron.tests import base
 from neutron.tests.common import helpers as c_helpers
-from neutron.tests.functional.agent.linux import helpers
+from neutron.tests.common import net_helpers
 
 
 class ConfigDict(base.AttributeDict):
@@ -34,7 +34,7 @@ class ConfigDict(base.AttributeDict):
 
         :param other: dictionary to be directly modified.
         """
-        for key, value in other.iteritems():
+        for key, value in six.iteritems(other):
             if isinstance(value, dict):
                 if not isinstance(value, base.AttributeDict):
                     other[key] = base.AttributeDict(value)
@@ -55,8 +55,7 @@ class ConfigFileFixture(fixtures.Fixture):
         self.config = config
         self.temp_dir = temp_dir
 
-    def setUp(self):
-        super(ConfigFileFixture, self).setUp()
+    def _setUp(self):
         config_parser = self.dict_to_config_parser(self.config)
         # Need to randomly generate a unique folder to put the file in
         self.filename = os.path.join(self.temp_dir, self.base_filename)
@@ -83,12 +82,12 @@ class ConfigFixture(fixtures.Fixture):
     is initializing a new instance of the class.
     """
     def __init__(self, temp_dir, base_filename):
+        super(ConfigFixture, self).__init__()
         self.config = ConfigDict()
         self.temp_dir = temp_dir
         self.base_filename = base_filename
 
-    def setUp(self):
-        super(ConfigFixture, self).setUp()
+    def _setUp(self):
         cfg_fixture = ConfigFileFixture(
             self.base_filename, self.config, self.temp_dir)
         self.useFixture(cfg_fixture)
@@ -97,7 +96,7 @@ class ConfigFixture(fixtures.Fixture):
 
 class NeutronConfigFixture(ConfigFixture):
 
-    def __init__(self, temp_dir, connection):
+    def __init__(self, temp_dir, connection, rabbitmq_environment):
         super(NeutronConfigFixture, self).__init__(
             temp_dir, base_filename='neutron.conf')
 
@@ -112,9 +111,10 @@ class NeutronConfigFixture(ConfigFixture):
                 'core_plugin': 'neutron.plugins.ml2.plugin.Ml2Plugin',
                 'service_plugins': ('neutron.services.l3_router.'
                                     'l3_router_plugin.L3RouterPlugin'),
-                'rabbit_userid': 'stackrabbit',
-                'rabbit_password': '127.0.0.1',
+                'rabbit_userid': rabbitmq_environment.user,
+                'rabbit_password': rabbitmq_environment.password,
                 'rabbit_hosts': '127.0.0.1',
+                'rabbit_virtual_host': rabbitmq_environment.vhost,
                 'auth_strategy': 'noauth',
                 'verbose': 'True',
                 'debug': 'True',
@@ -138,7 +138,8 @@ class NeutronConfigFixture(ConfigFixture):
         This might fail if some other process occupies this port after this
         function finished but before the neutron-server process started.
         """
-        return str(helpers.get_free_namespace_port())
+        return str(net_helpers.get_free_namespace_port(
+            constants.PROTO_NAME_TCP))
 
     def _generate_api_paste(self):
         return c_helpers.find_sample_file('api-paste.ini')
@@ -206,9 +207,13 @@ class L3ConfigFixture(ConfigFixture):
                 'external_network_bridge': self._generate_external_bridge(),
                 'debug': 'True',
                 'verbose': 'True',
+                'test_namespace_suffix': self._generate_namespace_suffix(),
             }
         })
 
     def _generate_external_bridge(self):
         return base.get_rand_name(prefix='br-ex',
                                   max_length=constants.DEVICE_NAME_MAX_LEN)
+
+    def _generate_namespace_suffix(self):
+        return base.get_rand_name(prefix='test')

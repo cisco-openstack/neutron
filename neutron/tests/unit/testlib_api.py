@@ -14,6 +14,7 @@
 #    under the License.
 
 import fixtures
+import six
 import testtools
 
 from neutron.db import api as db_api
@@ -47,7 +48,10 @@ def create_request(path, body, content_type, method='GET',
     req.method = method
     req.headers = {}
     req.headers['Accept'] = content_type
-    req.body = body
+    if isinstance(body, six.text_type):
+        req.body = body.encode()
+    else:
+        req.body = body
     if context:
         req.environ['neutron.context'] = context
     return req
@@ -58,8 +62,7 @@ class SqlFixture(fixtures.Fixture):
     # flag to indicate that the models have been loaded
     _TABLES_ESTABLISHED = False
 
-    def setUp(self):
-        super(SqlFixture, self).setUp()
+    def _setUp(self):
         # Register all data models
         engine = db_api.get_engine()
         if not SqlFixture._TABLES_ESTABLISHED:
@@ -73,6 +76,14 @@ class SqlFixture(fixtures.Fixture):
                     conn.execute(table.delete())
 
         self.addCleanup(clear_tables)
+
+
+class SqlTestCaseLight(base.DietTestCase):
+    """All SQL taste, zero plugin/rpc sugar"""
+
+    def setUp(self):
+        super(SqlTestCaseLight, self).setUp()
+        self.useFixture(SqlFixture())
 
 
 class SqlTestCase(base.BaseTestCase):

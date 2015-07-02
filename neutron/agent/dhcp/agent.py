@@ -21,6 +21,7 @@ import eventlet
 from oslo_config import cfg
 from oslo_log import log as logging
 import oslo_messaging
+from oslo_service import loopingcall
 from oslo_utils import importutils
 
 from neutron.agent.linux import dhcp
@@ -36,7 +37,6 @@ from neutron.common import utils
 from neutron import context
 from neutron.i18n import _LE, _LI, _LW
 from neutron import manager
-from neutron.openstack.common import loopingcall
 
 LOG = logging.getLogger(__name__)
 
@@ -69,6 +69,9 @@ class DhcpAgent(manager.Manager):
         self._process_monitor = external_process.ProcessMonitor(
             config=self.conf,
             resource_type='dhcp')
+
+    def init_host(self):
+        self.sync_state()
 
     def _populate_networks_cache(self):
         """Populate the networks cache when the DHCP-agent starts."""
@@ -379,7 +382,7 @@ class DhcpAgent(manager.Manager):
 
     def disable_isolated_metadata_proxy(self, network):
         metadata_driver.MetadataDriver.destroy_monitored_metadata_proxy(
-            self._process_monitor, network.id, network.namespace, self.conf)
+            self._process_monitor, network.id, self.conf)
 
 
 class DhcpPluginApi(object):
@@ -421,15 +424,6 @@ class DhcpPluginApi(object):
                              network_id=network_id, host=self.host)
         if network:
             return dhcp.NetModel(self.use_namespaces, network)
-
-    def get_dhcp_port(self, network_id, device_id):
-        """Make a remote process call to get the dhcp port."""
-        cctxt = self.client.prepare()
-        port = cctxt.call(self.context, 'get_dhcp_port',
-                          network_id=network_id, device_id=device_id,
-                          host=self.host)
-        if port:
-            return dhcp.DictModel(port)
 
     def create_dhcp_port(self, port):
         """Make a remote process call to create the dhcp port."""
@@ -554,7 +548,8 @@ class DhcpAgentWithStateReport(DhcpAgent):
             'configurations': {
                 'dhcp_driver': cfg.CONF.dhcp_driver,
                 'use_namespaces': cfg.CONF.use_namespaces,
-                'dhcp_lease_duration': cfg.CONF.dhcp_lease_duration},
+                'dhcp_lease_duration': cfg.CONF.dhcp_lease_duration,
+                'log_agent_heartbeats': cfg.CONF.AGENT.log_agent_heartbeats},
             'start_flag': True,
             'agent_type': constants.AGENT_TYPE_DHCP}
         report_interval = cfg.CONF.AGENT.report_interval

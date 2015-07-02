@@ -69,7 +69,7 @@ do whatever they are supposed to do. In a callback-less world this would work li
   C->my_random_very_difficult_to_remember_method_about_router_created()
 
 If B and/or C change, things become sour. In a callback-based world, things become a lot
-more uniform and straightward:
+more uniform and straightforward:
 
 ::
 
@@ -223,7 +223,7 @@ There are a few options to unsubscribe registered callbacks:
   resource R, any notification of events related to resource R will no longer be handed
   over to C, after the unsubscribe_by_resource() invocation.
 * unsubscribe_all(): say that callback C has subscribed to events A, B for resource R1,
-  and events C, D for resource R2, any notification of events pertaining resouces R1 and
+  and events C, D for resource R2, any notification of events pertaining resources R1 and
   R2 will no longer be handed over to C, after the unsubscribe_all() invocation.
 
 The snippet below shows these concepts in action:
@@ -319,7 +319,7 @@ Is the registry thread-safe?
 
   Short answer is no: it is not safe to make mutations while callbacks are being called (more
   details as to why can be found `here <https://hg.python.org/releasing/2.7.9/file/753a8f457ddc/Objects/dictobject.c#l937>`_).
-  A mutation could happen if a 'subscribe'/'unsuscribe' operation interleaves with the execution
+  A mutation could happen if a 'subscribe'/'unsubscribe' operation interleaves with the execution
   of the notify loop. Albeit there is a possibility that things may end up in a bad state, the
   registry works correctly under the assumption that subscriptions happen at the very beginning
   of the life of the process and that the unsubscriptions (if any) take place at the very end.

@@ -76,10 +76,10 @@ class SecurityGroupServerRpcCallback(object):
     def plugin(self):
         return manager.NeutronManager.get_plugin()
 
-    def _get_devices_info(self, devices):
+    def _get_devices_info(self, context, devices):
         return dict(
             (port['id'], port)
-            for port in self.plugin.get_ports_from_devices(devices)
+            for port in self.plugin.get_ports_from_devices(context, devices)
             if port and not port['device_owner'].startswith('network:')
         )
 
@@ -93,7 +93,7 @@ class SecurityGroupServerRpcCallback(object):
         :returns: port correspond to the devices with security group rules
         """
         devices_info = kwargs.get('devices')
-        ports = self._get_devices_info(devices_info)
+        ports = self._get_devices_info(context, devices_info)
         return self.plugin.security_group_rules_for_ports(context, ports)
 
     def security_group_info_for_devices(self, context, **kwargs):
@@ -110,7 +110,7 @@ class SecurityGroupServerRpcCallback(object):
         Note that sets are serialized into lists by rpc code.
         """
         devices_info = kwargs.get('devices')
-        ports = self._get_devices_info(devices_info)
+        ports = self._get_devices_info(context, devices_info)
         return self.plugin.security_group_info_for_ports(context, ports)
 
 
@@ -153,12 +153,14 @@ class SecurityGroupAgentRpcApiMixin(object):
         cctxt.cast(context, 'security_groups_member_updated',
                    security_groups=security_groups)
 
-    def security_groups_provider_updated(self, context):
+    def security_groups_provider_updated(self, context,
+                                         devices_to_update=None):
         """Notify provider updated security groups."""
-        cctxt = self.client.prepare(version=self.SG_RPC_VERSION,
+        cctxt = self.client.prepare(version='1.3',
                                     topic=self._get_security_group_topic(),
                                     fanout=True)
-        cctxt.cast(context, 'security_groups_provider_updated')
+        cctxt.cast(context, 'security_groups_provider_updated',
+                   devices_to_update=devices_to_update)
 
 
 class SecurityGroupAgentRpcCallbackMixin(object):
@@ -205,6 +207,7 @@ class SecurityGroupAgentRpcCallbackMixin(object):
     def security_groups_provider_updated(self, context, **kwargs):
         """Callback for security group provider update."""
         LOG.debug("Provider rule updated")
+        devices_to_update = kwargs.get('devices_to_update')
         if not self.sg_agent:
             return self._security_groups_agent_not_set()
-        self.sg_agent.security_groups_provider_updated()
+        self.sg_agent.security_groups_provider_updated(devices_to_update)

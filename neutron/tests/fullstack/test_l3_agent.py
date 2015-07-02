@@ -12,28 +12,30 @@
 #    License for the specific language governing permissions and limitations
 #    under the License.
 
+from oslo_utils import uuidutils
+
 from neutron.agent.l3 import agent as l3_agent
 from neutron.agent.l3 import namespaces
 from neutron.agent.linux import ip_lib
 from neutron.agent.linux import utils
-from neutron.openstack.common import uuidutils
 from neutron.tests.fullstack import base
 from neutron.tests.fullstack import fullstack_fixtures as f_fixtures
 
 
-class SingleNodeEnvironment(f_fixtures.EnvironmentFixture):
-    def setUp(self):
-        super(SingleNodeEnvironment, self).setUp()
+class SingleNodeEnvironment(f_fixtures.FullstackFixture):
+    def _setUp(self):
+        super(SingleNodeEnvironment, self)._setUp()
 
         neutron_config = self.neutron_server.neutron_cfg_fixture
         ml2_config = self.neutron_server.plugin_cfg_fixture
 
         self.ovs_agent = self.useFixture(
             f_fixtures.OVSAgentFixture(
-                neutron_config, ml2_config))
+                self.test_name, neutron_config, ml2_config))
 
         self.l3_agent = self.useFixture(
             f_fixtures.L3AgentFixture(
+                self.test_name,
                 self.temp_dir,
                 neutron_config,
                 self.ovs_agent._get_br_int_name()))
@@ -78,7 +80,10 @@ class TestLegacyL3Agent(base.BaseFullStackTestCase):
             body={'subnet_id': subnet['subnet']['id']})
 
         router_id = router['router']['id']
-        self._assert_namespace_exists(self._get_namespace(router_id))
+        namespace = "%s@%s" % (
+            self._get_namespace(router_id),
+            self.environment.l3_agent.get_namespace_suffix(), )
+        self._assert_namespace_exists(namespace)
 
         self.client.remove_interface_router(
             router=router['router']['id'],

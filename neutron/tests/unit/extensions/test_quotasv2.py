@@ -22,6 +22,7 @@ from webob import exc
 import webtest
 
 from neutron.api import extensions
+from neutron.api.v2 import router
 from neutron.common import config
 from neutron.common import constants
 from neutron.common import exceptions
@@ -68,6 +69,9 @@ class QuotaExtensionTestCase(testlib_api.WebTestCase):
         app = config.load_paste_app('extensions_test_app')
         ext_middleware = extensions.ExtensionMiddleware(app, ext_mgr=ext_mgr)
         self.api = webtest.TestApp(ext_middleware)
+        # Initialize the router for the core API in order to ensure core quota
+        # resources are registered
+        router.APIRouter()
 
     def tearDown(self):
         self.api = None
@@ -318,7 +322,7 @@ class QuotaExtensionDbTestCase(QuotaExtensionTestCase):
         tenant_id = 'tenant_id1'
         self.assertRaises(exceptions.QuotaResourceUnknown,
                           quota.QUOTAS.limit_check,
-                          context.get_admin_context(load_admin_roles=False),
+                          context.get_admin_context(),
                           tenant_id,
                           foobar=1)
 

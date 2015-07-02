@@ -20,6 +20,8 @@ from neutronclient.v2_0 import client
 from oslo_config import cfg
 from oslo_log import log as logging
 import oslo_messaging
+from oslo_service import loopingcall
+import six
 import six.moves.urllib.parse as urlparse
 import webob
 
@@ -33,7 +35,6 @@ from neutron.common import utils
 from neutron import context
 from neutron.i18n import _LE, _LW
 from neutron.openstack.common.cache import cache
-from neutron.openstack.common import loopingcall
 
 LOG = logging.getLogger(__name__)
 
@@ -116,7 +117,8 @@ class MetadataProxyHandler(object):
             LOG.exception(_LE("Unexpected error."))
             msg = _('An unknown error has occurred. '
                     'Please try your request again.')
-            return webob.exc.HTTPInternalServerError(explanation=unicode(msg))
+            explanation = six.text_type(msg)
+            return webob.exc.HTTPInternalServerError(explanation=explanation)
 
     def _get_ports_from_server(self, router_id=None, ip_address=None,
                                networks=None):
@@ -257,7 +259,8 @@ class MetadataProxyHandler(object):
                 'Remote metadata server experienced an internal server error.'
             )
             LOG.warn(msg)
-            return webob.exc.HTTPInternalServerError(explanation=unicode(msg))
+            explanation = six.text_type(msg)
+            return webob.exc.HTTPInternalServerError(explanation=explanation)
         else:
             raise Exception(_('Unexpected response code: %s') % resp.status)
 
@@ -286,6 +289,7 @@ class UnixDomainMetadataProxy(object):
                 'metadata_proxy_socket': cfg.CONF.metadata_proxy_socket,
                 'nova_metadata_ip': cfg.CONF.nova_metadata_ip,
                 'nova_metadata_port': cfg.CONF.nova_metadata_port,
+                'log_agent_heartbeats': cfg.CONF.AGENT.log_agent_heartbeats,
             },
             'start_flag': True,
             'agent_type': n_const.AGENT_TYPE_METADATA}

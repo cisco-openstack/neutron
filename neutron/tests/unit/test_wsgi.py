@@ -16,10 +16,10 @@
 import os
 import socket
 import ssl
-import urllib2
 
 import mock
 from oslo_config import cfg
+import six.moves.urllib.request as urlrequest
 import testtools
 import webob
 import webob.exc
@@ -41,16 +41,28 @@ def open_no_proxy(*args, **kwargs):
     # introduced in python 2.7.9 under PEP-0476
     # https://github.com/python/peps/blob/master/pep-0476.txt
     if hasattr(ssl, "_create_unverified_context"):
-        opener = urllib2.build_opener(
-            urllib2.ProxyHandler({}),
-            urllib2.HTTPSHandler(context=ssl._create_unverified_context())
+        opener = urlrequest.build_opener(
+            urlrequest.ProxyHandler({}),
+            urlrequest.HTTPSHandler(context=ssl._create_unverified_context())
         )
     else:
-        opener = urllib2.build_opener(urllib2.ProxyHandler({}))
+        opener = urlrequest.build_opener(urlrequest.ProxyHandler({}))
     return opener.open(*args, **kwargs)
 
 
-class TestWorkerService(base.BaseTestCase):
+class TestServiceBase(base.BaseTestCase):
+    """Service tests base."""
+
+    @mock.patch("neutron.policy.refresh")
+    @mock.patch("neutron.common.config.setup_logging")
+    def _test_reset(self, worker_service, setup_logging_mock, refresh_mock):
+        worker_service.reset()
+
+        setup_logging_mock.assert_called_once_with()
+        refresh_mock.assert_called_once_with()
+
+
+class TestWorkerService(TestServiceBase):
     """WorkerService tests."""
 
     @mock.patch('neutron.db.api.get_engine')
@@ -65,6 +77,13 @@ class TestWorkerService(base.BaseTestCase):
         workerservice.start()
         self.assertFalse(apimock.called)
 
+    def test_reset(self):
+        _service = mock.Mock()
+        _app = mock.Mock()
+
+        worker_service = wsgi.WorkerService(_service, _app)
+        self._test_reset(worker_service)
+
 
 class TestWSGIServer(base.BaseTestCase):
     """WSGI server tests."""
@@ -76,7 +95,7 @@ class TestWSGIServer(base.BaseTestCase):
         server.stop()
         server.wait()
 
-    @mock.patch('neutron.openstack.common.service.ProcessLauncher')
+    @mock.patch('oslo_service.service.ProcessLauncher')
     def test_start_multiple_workers(self, ProcessLauncher):
         launcher = ProcessLauncher.return_value
 
@@ -132,7 +151,7 @@ class TestWSGIServer(base.BaseTestCase):
                         mock.call(
                             server._run,
                             None,
-                            mock_listen.return_value)
+                            mock_listen.return_value.dup.return_value)
                     ])
 
     def test_app(self):
@@ -339,14 +358,14 @@ class RequestTest(base.BaseTestCase):
 
     def test_content_type_missing(self):
         request = wsgi.Request.blank('/tests/123', method='POST')
-        request.body = "<body />"
+        request.body = b"<body />"
 
         self.assertIsNone(request.get_content_type())
 
     def test_content_type_unsupported(self):
         request = wsgi.Request.blank('/tests/123', method='POST')
         request.headers["Content-Type"] = "text/html"
-        request.body = "fake<br />"
+        request.body = b"fake<br />"
 
         self.assertIsNone(request.get_content_type())
 
@@ -599,7 +618,7 @@ class ResourceTest(base.BaseTestCase):
     def test_malformed_request_body_throws_bad_request(self):
         resource = wsgi.Resource(None, self.my_fault_body_function)
         request = wsgi.Request.blank(
-            "/", body="{mal:formed", method='POST',
+            "/", body=b"{mal:formed", method='POST',
             headers={'Content-Type': "application/json"})
 
         response = resource(request)
@@ -608,7 +627,7 @@ class ResourceTest(base.BaseTestCase):
     def test_wrong_content_type_throws_unsupported_media_type_error(self):
         resource = wsgi.Resource(None, self.my_fault_body_function)
         request = wsgi.Request.blank(
-            "/", body="{some:json}", method='POST',
+            "/", body=b"{some:json}", method='POST',
             headers={'Content-Type': "xxx"})
 
         response = resource(request)

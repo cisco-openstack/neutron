@@ -31,17 +31,19 @@ import oslo_i18n
 from oslo_log import log as logging
 from oslo_log import loggers
 from oslo_serialization import jsonutils
+from oslo_service import service as common_service
+from oslo_service import systemd
 from oslo_utils import excutils
 import routes.middleware
+import six
 import webob.dec
 import webob.exc
 
+from neutron.common import config
 from neutron.common import exceptions as exception
 from neutron import context
 from neutron.db import api
 from neutron.i18n import _LE, _LI
-from neutron.openstack.common import service as common_service
-from neutron.openstack.common import systemd
 
 socket_opts = [
     cfg.IntOpt('backlog',
@@ -90,7 +92,7 @@ CONF.register_opts(socket_opts)
 LOG = logging.getLogger(__name__)
 
 
-class WorkerService(object):
+class WorkerService(common_service.ServiceBase):
     """Wraps a worker to be handled by ProcessLauncher"""
     def __init__(self, service, application):
         self._service = service
@@ -98,16 +100,17 @@ class WorkerService(object):
         self._server = None
 
     def start(self):
-        # We may have just forked from parent process.  A quick disposal of the
-        # existing sql connections avoids producing 500 errors later when they
-        # are discovered to be broken.
-        api.dispose()
+        # When api worker is stopped it kills the eventlet wsgi server which
+        # internally closes the wsgi server socket object. This server socket
+        # object becomes not usable which leads to "Bad file descriptor"
+        # errors on service restart.
+        # Duplicate a socket object to keep a file descriptor usable.
+        dup_sock = self._service._socket.dup()
         if CONF.use_ssl:
-            self._service._socket = self._service.wrap_ssl(
-                self._service._socket)
+            dup_sock = self._service.wrap_ssl(dup_sock)
         self._server = self._service.pool.spawn(self._service._run,
                                                 self._application,
-                                                self._service._socket)
+                                                dup_sock)
 
     def wait(self):
         if isinstance(self._server, eventlet.greenthread.GreenThread):
@@ -117,6 +120,10 @@ class WorkerService(object):
         if isinstance(self._server, eventlet.greenthread.GreenThread):
             self._server.kill()
             self._server = None
+
+    @staticmethod
+    def reset():
+        config.reset_service()
 
 
 class Server(object):
@@ -234,10 +241,15 @@ class Server(object):
             service.start()
             systemd.notify_once()
         else:
+            # dispose the whole pool before os.fork, otherwise there will
+            # be shared DB connections in child processes which may cause
+            # DB errors.
+            api.dispose()
             # The API service runs in a number of child processes.
             # Minimize the cost of checking for child exit by extending the
             # wait interval past the default of 0.01s.
-            self._server = common_service.ProcessLauncher(wait_interval=1.0)
+            self._server = common_service.ProcessLauncher(cfg.CONF,
+                                                          wait_interval=1.0)
             self._server.launch_service(service, workers=workers)
 
     @property
@@ -411,7 +423,7 @@ class JSONDictSerializer(DictSerializer):
 
     def default(self, data):
         def sanitizer(obj):
-            return unicode(obj)
+            return six.text_type(obj)
         return jsonutils.dumps(data, default=sanitizer)
 
 
@@ -666,7 +678,7 @@ class Debug(Middleware):
         resp = req.get_response(self.application)
 
         print(("*" * 40) + " RESPONSE HEADERS")
-        for (key, value) in resp.headers.iteritems():
+        for (key, value) in six.iteritems(resp.headers):
             print(key, "=", value)
         print()
 

@@ -136,8 +136,9 @@ class IptablesFirewallTestCase(BaseIptablesFirewallTestCase):
                                     comment=ic.INPUT_TO_SG),
                  mock.call.add_chain('sfake_dev'),
                  mock.call.add_rule(
-                     'sfake_dev', '-m mac --mac-source ff:ff:ff:ff:ff:ff '
-                     '-s 10.0.0.1 -j RETURN',
+                     'sfake_dev',
+                     '-s 10.0.0.1 -m mac --mac-source FF:FF:FF:FF:FF:FF '
+                     '-j RETURN',
                      comment=ic.PAIR_ALLOW),
                  mock.call.add_rule(
                      'sfake_dev', '-j DROP',
@@ -977,7 +978,7 @@ class IptablesFirewallTestCase(BaseIptablesFirewallTestCase):
                   mock.call.add_chain('sfake_dev'),
                   mock.call.add_rule(
                       'sfake_dev',
-                      '-m mac --mac-source ff:ff:ff:ff:ff:ff -s %s -j RETURN'
+                      '-s %s -m mac --mac-source FF:FF:FF:FF:FF:FF -j RETURN'
                       % prefix,
                       comment=ic.PAIR_ALLOW),
                   mock.call.add_rule(
@@ -1076,7 +1077,7 @@ class IptablesFirewallTestCase(BaseIptablesFirewallTestCase):
                  mock.call.add_chain('sfake_dev'),
                  mock.call.add_rule(
                      'sfake_dev',
-                     '-m mac --mac-source ff:ff:ff:ff:ff:ff -s 10.0.0.1 '
+                     '-s 10.0.0.1 -m mac --mac-source FF:FF:FF:FF:FF:FF '
                      '-j RETURN',
                      comment=ic.PAIR_ALLOW),
                  mock.call.add_rule(
@@ -1148,7 +1149,7 @@ class IptablesFirewallTestCase(BaseIptablesFirewallTestCase):
                  mock.call.add_chain('sfake_dev'),
                  mock.call.add_rule(
                      'sfake_dev',
-                     '-m mac --mac-source ff:ff:ff:ff:ff:ff -s 10.0.0.1 '
+                     '-s 10.0.0.1 -m mac --mac-source FF:FF:FF:FF:FF:FF '
                      '-j RETURN',
                      comment=ic.PAIR_ALLOW),
                  mock.call.add_rule(
@@ -1318,12 +1319,12 @@ class IptablesFirewallTestCase(BaseIptablesFirewallTestCase):
                  mock.call.add_chain('sfake_dev'),
                  mock.call.add_rule(
                      'sfake_dev',
-                     '-m mac --mac-source ff:ff:ff:ff:ff:ff -s 10.0.0.1 '
+                     '-s 10.0.0.1 -m mac --mac-source FF:FF:FF:FF:FF:FF '
                      '-j RETURN',
                      comment=ic.PAIR_ALLOW),
                  mock.call.add_rule(
                      'sfake_dev',
-                     '-m mac --mac-source ff:ff:ff:ff:ff:ff -s 10.0.0.2 '
+                     '-s 10.0.0.2 -m mac --mac-source FF:FF:FF:FF:FF:FF '
                      '-j RETURN',
                      comment=ic.PAIR_ALLOW),
                  mock.call.add_rule(
@@ -1398,7 +1399,7 @@ class IptablesFirewallTestCase(BaseIptablesFirewallTestCase):
                  mock.call.add_chain('sfake_dev'),
                  mock.call.add_rule(
                      'sfake_dev',
-                     '-m mac --mac-source ff:ff:ff:ff:ff:ff -j RETURN',
+                     '-m mac --mac-source FF:FF:FF:FF:FF:FF -j RETURN',
                      comment=ic.PAIR_ALLOW),
                  mock.call.add_rule(
                      'sfake_dev', '-j DROP',
@@ -1514,6 +1515,17 @@ class IptablesFirewallEnhancedIpsetTestCase(BaseIptablesFirewallTestCase):
         self.assertEqual(
             {_IPv4: set([FAKE_SGID]), _IPv6: set([OTHER_SGID])},
             self.firewall._get_remote_sg_ids_sets_by_ipversion(ports))
+
+    def test_get_remote_sg_ids(self):
+        self.firewall.sg_rules = self._fake_sg_rules(
+            remote_groups={_IPv4: [FAKE_SGID, FAKE_SGID, FAKE_SGID],
+                           _IPv6: [OTHER_SGID, OTHER_SGID, OTHER_SGID]})
+
+        port = self._fake_port()
+
+        self.assertEqual(
+            {_IPv4: set([FAKE_SGID]), _IPv6: set([OTHER_SGID])},
+            self.firewall._get_remote_sg_ids(port))
 
     def test_determine_sg_rules_to_remove(self):
         self.firewall.pre_sg_rules = self._fake_sg_rules(sg_id=OTHER_SGID)

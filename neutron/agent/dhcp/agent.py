@@ -70,6 +70,9 @@ class DhcpAgent(manager.Manager):
             config=self.conf,
             resource_type='dhcp')
 
+    def init_host(self):
+        self.sync_state()
+
     def _populate_networks_cache(self):
         """Populate the networks cache when the DHCP-agent starts."""
         try:
@@ -359,8 +362,8 @@ class DhcpAgent(manager.Manager):
         # be started for the router attached to the network
         if self.conf.enable_metadata_network:
             router_ports = [port for port in network.ports
-                            if (port.device_owner ==
-                                constants.DEVICE_OWNER_ROUTER_INTF)]
+                            if (port.device_owner in
+                                constants.ROUTER_INTERFACE_OWNERS)]
             if router_ports:
                 # Multiple router ports should not be allowed
                 if len(router_ports) > 1:

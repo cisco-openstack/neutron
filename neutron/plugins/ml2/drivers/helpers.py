@@ -13,6 +13,8 @@
 #    License for the specific language governing permissions and limitations
 #    under the License.
 
+import random
+
 from oslo.db import exception as db_exc
 
 from neutron.common import exceptions as exc
@@ -22,7 +24,7 @@ from neutron.plugins.ml2 import driver_api as api
 
 # Number of attempts to find a valid segment candidate and allocate it
 DB_MAX_ATTEMPTS = 10
-
+IDPOOL_SELECT_SIZE = 100
 
 LOG = log.getLogger(__name__)
 

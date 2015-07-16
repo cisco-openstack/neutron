@@ -56,6 +56,7 @@ class HyperVUtilsV2(utils.HyperVUtils):
     _TCP_PROTOCOL = 'tcp'
     _UDP_PROTOCOL = 'udp'
     _ICMP_PROTOCOL = '1'
+    _ICMPV6_PROTOCOL = '58'
     _MAX_WEIGHT = 65500
 
     # 2 directions x 2 address types = 4 ACLs
@@ -318,9 +319,8 @@ class HyperVUtilsV2(utils.HyperVUtils):
         ipv6_pair = (self._ACL_TYPE_IPV6, self._IPV6_ANY)
         for direction in [self._ACL_DIR_IN, self._ACL_DIR_OUT]:
             for acl_type, address in [ipv4_pair, ipv6_pair]:
-                for protocol in [self._TCP_PROTOCOL,
-                                 self._UDP_PROTOCOL,
-                                 self._ICMP_PROTOCOL]:
+                for protocol in [self._TCP_PROTOCOL, self._UDP_PROTOCOL,
+                                 self._ICMP_PROTOCOL, self._ICMPV6_PROTOCOL]:
                     self._bind_security_rule(
                         port, direction, acl_type, self._ACL_ACTION_DENY,
                         self._ACL_DEFAULT, protocol, address, weight)
@@ -386,18 +386,46 @@ class HyperVUtilsV2R2(HyperVUtilsV2):
     _PORT_EXT_ACL_SET_DATA = 'Msvm_EthernetSwitchPortExtendedAclSettingData'
     _MAX_WEIGHT = 65500
 
-    # 2 directions x 2 address types x 3 protocols = 12 ACLs
-    _REJECT_ACLS_COUNT = 12
+    # 2 directions x 2 address types x 4 protocols = 16 ACLs
+    _REJECT_ACLS_COUNT = 16
+
+    def create_security_rule(self, switch_port_name, direction, acl_type,
+                             local_port, protocol, remote_address):
+        if protocol is self._ACL_DEFAULT:
+            protocols = [self._ICMP_PROTOCOL, self._ICMPV6_PROTOCOL,
+                         self._TCP_PROTOCOL, self._UDP_PROTOCOL]
+        else:
+            protocols = [protocol]
+
+        for protocol in protocols:
+            super(HyperVUtilsV2R2, self).create_security_rule(
+                switch_port_name, direction, acl_type, local_port, protocol,
+                remote_address)
+
+    def remove_security_rule(self, switch_port_name, direction, acl_type,
+                             local_port, protocol, remote_address):
+        if protocol is self._ACL_DEFAULT:
+            protocols = [self._ICMP_PROTOCOL, self._ICMPV6_PROTOCOL,
+                         self._TCP_PROTOCOL, self._UDP_PROTOCOL]
+        else:
+            protocols = [protocol]
+
+        for protocol in protocols:
+            super(HyperVUtilsV2R2, self).remove_security_rule(
+                switch_port_name, direction, acl_type, local_port, protocol,
+                remote_address)
 
     def _create_security_acl(self, direction, acl_type, action, local_port,
                              protocol, remote_addr, weight):
         acl = self._get_default_setting_data(self._PORT_EXT_ACL_SET_DATA)
+        is_icmp = protocol in [self._ICMP_PROTOCOL, self._ICMPV6_PROTOCOL]
         acl.set(Direction=direction,
                 Action=action,
-                LocalPort=str(local_port),
+                LocalPort=str(local_port) if not is_icmp else '',
                 Protocol=protocol,
                 RemoteIPAddress=remote_addr,
                 IdleSessionTimeout=0,
+                Stateful=(not is_icmp and action is not self._ACL_ACTION_DENY),
                 Weight=weight)
         return acl
 
@@ -406,7 +434,10 @@ class HyperVUtilsV2R2(HyperVUtilsV2):
         return [v for v in acls
                 if v.Action == action and
                 v.Direction == direction and
-                v.LocalPort == str(local_port) and
+                v.LocalPort == ((str(local_port))
+                                if not protocol ==
+                                self._ICMP_PROTOCOL else '')
+                and
                 v.Protocol == protocol and
                 v.RemoteIPAddress == remote_addr]
 

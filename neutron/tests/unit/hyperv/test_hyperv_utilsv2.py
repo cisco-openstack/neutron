@@ -346,7 +346,8 @@ class TestHyperVUtilsV2(base.BaseTestCase):
             for acl_type, address in [ipv4_pair, ipv6_pair]:
                 for protocol in [self._utils._TCP_PROTOCOL,
                                  self._utils._UDP_PROTOCOL,
-                                 self._utils._ICMP_PROTOCOL]:
+                                 self._utils._ICMP_PROTOCOL,
+                                 self._utils._ICMPV6_PROTOCOL]:
                     calls.append(mock.call(m_port, direction, acl_type,
                                            self._utils._ACL_ACTION_DENY,
                                            self._utils._ACL_DEFAULT,
@@ -447,6 +448,108 @@ class TestHyperVUtilsV2R2(base.BaseTestCase):
         super(TestHyperVUtilsV2R2, self).setUp()
         self._utils = utilsv2.HyperVUtilsV2R2()
 
+    @mock.patch.object(utilsv2.HyperVUtilsV2, 'create_security_rule')
+    def _check_create_security_group_rule(self, mock_super_create_sec_rule,
+                                          is_any_protocol=True):
+        if is_any_protocol:
+            protocol = self._utils._ACL_DEFAULT
+            expected_proto = [self._utils._ICMP_PROTOCOL,
+                              self._utils._ICMPV6_PROTOCOL,
+                              self._utils._TCP_PROTOCOL,
+                              self._utils._UDP_PROTOCOL]
+        else:
+            protocol = self._utils._TCP_PROTOCOL
+            expected_proto = [self._utils._TCP_PROTOCOL]
+
+        self._utils.create_security_rule(
+            mock.sentinel.switch_port_name, mock.sentinel.direction,
+            mock.sentinel.acl_type, mock.sentinel.local_port,
+            protocol, mock.sentinel.remote_address)
+
+        fake_calls = [mock.call(
+            mock.sentinel.switch_port_name, mock.sentinel.direction,
+            mock.sentinel.acl_type, mock.sentinel.local_port,
+            proto, mock.sentinel.remote_address) for proto in expected_proto]
+
+        mock_super_create_sec_rule.assert_has_calls(fake_calls)
+
+    def test_create_security_group_rule_any(self):
+        self._check_create_security_group_rule()
+
+    def test_create_security_group_rule_tcp(self):
+        self._check_create_security_group_rule(is_any_protocol=False)
+
+    @mock.patch.object(utilsv2.HyperVUtilsV2R2, '_get_default_setting_data')
+    def _check_create_security_acl(self, mock_get_default_set_data, protocol,
+                                   action, expected_local_port=None,
+                                   expected_stateful=False):
+        if expected_local_port is None:
+            expected_local_port = self._FAKE_LOCAL_PORT
+
+        mock_acl = mock_get_default_set_data.return_value
+
+        self._utils._create_security_acl(
+            mock.sentinel.direction, mock.sentinel.acl_type, action,
+            self._FAKE_LOCAL_PORT, protocol, mock.sentinel.remote_addr,
+            mock.sentinel.weight)
+
+        mock_acl.set.assert_called_once_with(
+            Direction=mock.sentinel.direction,
+            Action=action,
+            LocalPort=expected_local_port,
+            Protocol=protocol,
+            RemoteIPAddress=mock.sentinel.remote_addr,
+            IdleSessionTimeout=0,
+            Stateful=expected_stateful,
+            Weight=mock.sentinel.weight)
+
+    def test_create_security_acl_deny(self):
+        self._check_create_security_acl(protocol=self._utils._TCP_PROTOCOL,
+                                        action=self._utils._ACL_ACTION_DENY)
+
+    def test_create_security_acl_icmp(self):
+        self._check_create_security_acl(protocol=self._utils._ICMP_PROTOCOL,
+                                        action=self._utils._ACL_ACTION_ALLOW,
+                                        expected_local_port='')
+
+    def test_create_security_acl_icmpV6(self):
+        self._check_create_security_acl(protocol=self._utils._ICMPV6_PROTOCOL,
+                                        action=self._utils._ACL_ACTION_ALLOW,
+                                        expected_local_port='')
+
+    def test_create_security_acl_allow_tcp(self):
+        self._check_create_security_acl(protocol=self._utils._TCP_PROTOCOL,
+                                        action=self._utils._ACL_ACTION_ALLOW,
+                                        expected_stateful=True)
+
+    @mock.patch.object(utilsv2.HyperVUtilsV2, 'remove_security_rule')
+    def _check_remove_security_group_rule(self, mock_super_remove_sec_rule,
+                                          is_any_protocol=True):
+        if is_any_protocol:
+            protocol = self._utils._ACL_DEFAULT
+            expected_proto = [self._utils._ICMP_PROTOCOL,
+                              self._utils._ICMPV6_PROTOCOL,
+                              self._utils._TCP_PROTOCOL,
+                              self._utils._UDP_PROTOCOL]
+        else:
+            protocol = self._utils._TCP_PROTOCOL
+            expected_proto = [self._utils._TCP_PROTOCOL]
+
+        self._utils.remove_security_rule(
+            mock.sentinel.switch_port_name, mock.sentinel.direction,
+            mock.sentinel.acl_type, mock.sentinel.local_port,
+            protocol, mock.sentinel.remote_address)
+
+        fake_calls = [mock.call(
+            mock.sentinel.switch_port_name, mock.sentinel.direction,
+            mock.sentinel.acl_type, mock.sentinel.local_port,
+            proto, mock.sentinel.remote_address) for proto in expected_proto]
+
+        mock_super_remove_sec_rule.assert_has_calls(fake_calls)
+
+    def test_remove_security_group_rule_any(self):
+        self._check_remove_security_group_rule()
+
     def test_filter_security_acls(self):
         self._test_filter_security_acls(
             self._FAKE_LOCAL_PORT, self._FAKE_PROTOCOL, self._FAKE_REMOTE_ADDR)
@@ -479,6 +582,23 @@ class TestHyperVUtilsV2R2(base.BaseTestCase):
 
         self.assertEqual(right_acls, good_acls)
         self.assertEqual([], bad_acls)
+
+    def test_filter_security_acls_icmp(self):
+        default = self._utils._ACL_DEFAULT
+
+        mock_acl = mock.MagicMock()
+        mock_acl.Action = self._utils._ACL_ACTION_ALLOW
+        mock_acl.Direction = self._FAKE_ACL_DIR
+        mock_acl.LocalPort = ''
+        mock_acl.Protocol = self._utils._ICMP_PROTOCOL
+        mock_acl.RemoteIPAddress = self._FAKE_REMOTE_ADDR
+
+        icmp_acl_empty_port = self._utils._filter_security_acls(
+            [mock_acl], mock_acl.Action, self._FAKE_ACL_DIR,
+            self._FAKE_ACL_TYPE, default,
+            self._utils._ICMP_PROTOCOL, self._FAKE_REMOTE_ADDR)
+
+        self.assertEqual(mock_acl, icmp_acl_empty_port[0])
 
     def test_get_new_weight(self):
         mockacl1 = mock.MagicMock()

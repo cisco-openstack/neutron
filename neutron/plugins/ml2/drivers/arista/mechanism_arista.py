@@ -21,6 +21,7 @@ from oslo.config import cfg
 
 from neutron.common import constants as n_const
 from neutron.openstack.common import log as logging
+from neutron.plugins.common import constants as p_const
 from neutron.plugins.ml2.common import exceptions as ml2_exc
 from neutron.plugins.ml2 import driver_api
 from neutron.plugins.ml2.drivers.arista import config  # noqa
@@ -759,6 +760,9 @@ class AristaDriver(driver_api.MechanismDriver):
 
         network = context.current
         segments = context.network_segments
+        if segments[0][driver_api.NETWORK_TYPE] != p_const.TYPE_VLAN:
+            # If network type is not VLAN, do nothing
+            return
         network_id = network['id']
         tenant_id = network['tenant_id']
         if not tenant_id:
@@ -857,6 +861,10 @@ class AristaDriver(driver_api.MechanismDriver):
     def delete_network_postcommit(self, context):
         """Send network delete request to Arista HW."""
         network = context.current
+        segments = context.network_segments
+        if segments[0][driver_api.NETWORK_TYPE] != p_const.TYPE_VLAN:
+            # If networtk type is not VLAN, do nothing
+            return
         network_id = network['id']
         tenant_id = network['tenant_id']
         if not tenant_id:
@@ -892,6 +900,9 @@ class AristaDriver(driver_api.MechanismDriver):
             if not tenant_id:
                 tenant_id = context._plugin_context.tenant_id
             with self.eos_sync_lock:
+                if not db.is_network_provisioned(tenant_id, network_id):
+                    # Ignore this request if network is not provisioned
+                    return
                 db.remember_tenant(tenant_id)
                 db.remember_vm(device_id, host, port_id,
                                network_id, tenant_id)
@@ -955,6 +966,21 @@ class AristaDriver(driver_api.MechanismDriver):
         if new_port['name'] != orig_port['name']:
             msg = _('Port name changed to %s') % new_port['name']
             LOG.info(msg)
+        device_id = new_port['device_id']
+        device_owner = new_port['device_owner']
+        host = context.host
+
+        # device_id and device_owner are set on VM boot
+        is_vm_boot = device_id and device_owner
+        if host and host != orig_port['binding:host_id'] and is_vm_boot:
+            port_id = new_port['id']
+            network_id = new_port['network_id']
+            tenant_id = new_port['tenant_id']
+            if not tenant_id:
+                tenant_id = context._plugin_context.tenant_id
+            with self.eos_sync_lock:
+                db.update_vm_host(device_id, host, port_id,
+                                  network_id, tenant_id)
 
     def update_port_postcommit(self, context):
         """Update the name of a given port in EOS.
@@ -964,9 +990,6 @@ class AristaDriver(driver_api.MechanismDriver):
         """
         port = context.current
         orig_port = context.original
-        if port['name'] == orig_port['name']:
-            # nothing to do
-            return
 
         device_id = port['device_id']
         device_owner = port['device_owner']
@@ -994,6 +1017,12 @@ class AristaDriver(driver_api.MechanismDriver):
                                                             segmentation_id)
                 if vm_provisioned and net_provisioned:
                     try:
+                        orig_host = orig_port['binding:host_id']
+                        if host != orig_host:
+                            # The port moved to a different host. So delete the
+                            # old port on the old host before creating a new
+                            # port on the new host.
+                            self._delete_port(port, orig_host, tenant_id)
                         self.rpc.plug_port_into_network(device_id,
                                                         hostname,
                                                         port_id,
@@ -1035,30 +1064,47 @@ class AristaDriver(driver_api.MechanismDriver):
         from appropriate network.
         """
         port = context.current
-        device_id = port['device_id']
         host = context.host
-        port_id = port['id']
-        network_id = port['network_id']
         tenant_id = port['tenant_id']
         if not tenant_id:
             tenant_id = context._plugin_context.tenant_id
+
+        with self.eos_sync_lock:
+            self._delete_port(port, host, tenant_id)
+
+    def _delete_port(self, port, host, tenant_id):
+        """Deletes the port from EOS.
+
+        param port: Port which is to be deleted
+        param host: The host on which the port existed
+        param tenant_id: The tenant to which the port belongs to. Some times
+                         the tenant id in the port dict is not present (as in
+                         the case of HA router).
+        """
+        device_id = port['device_id']
+        port_id = port['id']
+        network_id = port['network_id']
         device_owner = port['device_owner']
 
         try:
-            with self.eos_sync_lock:
-                hostname = self._host_name(host)
-                if device_owner == n_const.DEVICE_OWNER_DHCP:
-                    self.rpc.unplug_dhcp_port_from_network(device_id,
-                                                           hostname,
-                                                           port_id,
-                                                           network_id,
-                                                           tenant_id)
-                else:
-                    self.rpc.unplug_host_from_network(device_id,
-                                                      hostname,
-                                                      port_id,
-                                                      network_id,
-                                                      tenant_id)
+            if not db.is_network_provisioned(tenant_id, network_id):
+                # If we do not have network associated with this, ignore it
+                return
+            hostname = self._host_name(host)
+            if device_owner == n_const.DEVICE_OWNER_DHCP:
+                self.rpc.unplug_dhcp_port_from_network(device_id,
+                                                       hostname,
+                                                       port_id,
+                                                       network_id,
+                                                       tenant_id)
+            else:
+                self.rpc.unplug_host_from_network(device_id,
+                                                  hostname,
+                                                  port_id,
+                                                  network_id,
+                                                  tenant_id)
+            # if necessary, delete tenant as well.
+            self.delete_tenant(tenant_id)
         except arista_exc.AristaRpcError:
             LOG.info(EOS_UNREACHABLE_MSG)
             raise ml2_exc.MechanismDriverError()

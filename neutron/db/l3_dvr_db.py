@@ -311,6 +311,13 @@ class L3_NAT_with_dvr_db_mixin(l3_db.L3_NAT_db_mixin,
             context, router_interface_info, 'add')
         return router_interface_info
 
+    def _port_has_ipv6_address(self, port):
+        """Overridden to return False if DVR SNAT port."""
+        if port['device_owner'] == DEVICE_OWNER_DVR_SNAT:
+            return False
+        return super(L3_NAT_with_dvr_db_mixin,
+                     self)._port_has_ipv6_address(port)
+
     def remove_router_interface(self, context, router_id, interface_info):
         remove_by_port, remove_by_subnet = (
             self._validate_interface_info(interface_info, for_removal=True)
@@ -528,7 +535,7 @@ class L3_NAT_with_dvr_db_mixin(l3_db.L3_NAT_db_mixin,
                                             filters=device_filter)
         for p in ports:
             if self._get_vm_port_hostid(context, p['id'], p) == host_id:
-                self._core_plugin._delete_port(context, p['id'])
+                self._core_plugin.ipam.delete_port(context, p['id'])
                 return
 
     def create_fip_agent_gw_port_if_not_exists(

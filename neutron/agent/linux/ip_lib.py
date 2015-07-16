@@ -22,6 +22,7 @@ from oslo_utils import excutils
 import re
 
 from neutron.agent.common import utils
+from neutron.common import constants
 from neutron.common import exceptions
 from neutron.i18n import _LE
 
@@ -281,30 +282,54 @@ class IPRule(SubProcessBase):
 class IpRuleCommand(IpCommandBase):
     COMMAND = 'rule'
 
-    def _exists(self, ip, ip_version, table, rule_pr):
-        # Typical rule from 'ip rule show':
+    def _parse_line(self, ip_version, line):
+        # Typical rules from 'ip rule show':
         # 4030201:  from 1.2.3.4/24 lookup 10203040
+        # 1024:     from all iif qg-c43b1928-48 lookup noscope
 
-        rule_pr = str(rule_pr) + ":"
-        for line in self._as_root([ip_version], ['show']).splitlines():
-            parts = line.split()
-            if parts and (parts[0] == rule_pr and
-                          parts[2] == str(ip) and
-                          parts[-1] == str(table)):
-                return True
+        parts = line.split()
+        if not parts:
+            return {}
 
-        return False
+        # Format of line is: "priority: <key> <value> ..."
+        settings = {k: v for k, v in zip(parts[1::2], parts[2::2])}
+        settings['priority'] = parts[0][:-1]
 
-    def add(self, ip, table, rule_pr):
+        # Canonicalize some arguments
+        if settings.get('from') == "all":
+            settings['from'] = constants.IP_ANY[ip_version]
+        if 'lookup' in settings:
+            settings['table'] = settings.pop('lookup')
+
+        return settings
+
+    def _exists(self, ip_version, **kwargs):
+        kwargs_strings = {k: str(v) for k, v in kwargs.items()}
+        lines = self._as_root([ip_version], ['show']).splitlines()
+        return kwargs_strings in (self._parse_line(ip_version, line)
+                                  for line in lines)
+
+    def _make__flat_args_tuple(self, *args, **kwargs):
+        for kwargs_item in sorted(kwargs.items(), key=lambda i: i[0]):
+            args += kwargs_item
+        return tuple(args)
+
+    def add(self, ip, **kwargs):
         ip_version = get_ip_version(ip)
-        if not self._exists(ip, ip_version, table, rule_pr):
-            args = ['add', 'from', ip, 'table', table, 'priority', rule_pr]
-            self._as_root([ip_version], tuple(args))
 
-    def delete(self, ip, table, rule_pr):
+        kwargs.update({'from': ip})
+
+        if not self._exists(ip_version, **kwargs):
+            args_tuple = self._make__flat_args_tuple('add', **kwargs)
+            self._as_root([ip_version], args_tuple)
+
+    def delete(self, ip, **kwargs):
         ip_version = get_ip_version(ip)
-        args = ['del', 'table', table, 'priority', rule_pr]
-        self._as_root([ip_version], tuple(args))
+
+        # TODO(Carl) ip ignored in delete, okay in general?
+
+        args_tuple = self._make__flat_args_tuple('del', **kwargs)
+        self._as_root([ip_version], args_tuple)
 
 
 class IpDeviceCommandBase(IpCommandBase):
@@ -714,16 +739,22 @@ def device_exists_with_ips_and_mac(device_name, ip_cidrs, mac, namespace=None):
         return True
 
 
-def get_routing_table(namespace=None):
+def get_routing_table(ip_version, namespace=None):
     """Return a list of dictionaries, each representing a route.
 
+    @param ip_version: the routes of version to return, for example 4
+    @param namespace
+    @return: a list of dictionaries, each representing a route.
     The dictionary format is: {'destination': cidr,
                                'nexthop': ip,
-                               'device': device_name}
+                               'device': device_name,
+                               'scope': scope}
     """
 
     ip_wrapper = IPWrapper(namespace=namespace)
-    table = ip_wrapper.netns.execute(['ip', 'route'], check_exit_code=True)
+    table = ip_wrapper.netns.execute(
+        ['ip', '-%s' % ip_version, 'route'],
+        check_exit_code=True)
 
     routes = []
     # Example for route_lines:
@@ -740,7 +771,8 @@ def get_routing_table(namespace=None):
         data = dict(route[i:i + 2] for i in range(1, len(route), 2))
         routes.append({'destination': network,
                        'nexthop': data.get('via'),
-                       'device': data.get('dev')})
+                       'device': data.get('dev'),
+                       'scope': data.get('scope')})
     return routes
 
 

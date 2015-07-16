@@ -35,10 +35,10 @@ from neutron.agent import rpc as agent_rpc
 from neutron.agent import securitygroups_rpc as sg_rpc
 from neutron.api.rpc.handlers import dvr_rpc
 from neutron.common import config
-from neutron.common import constants as q_const
+from neutron.common import constants as n_const
 from neutron.common import exceptions
 from neutron.common import topics
-from neutron.common import utils as q_utils
+from neutron.common import utils as n_utils
 from neutron import context
 from neutron.i18n import _LE, _LI, _LW
 from neutron.plugins.common import constants as p_const
@@ -192,7 +192,7 @@ class OVSNeutronAgent(sg_rpc.SecurityGroupAgentRpcCallbackMixin,
         self.agent_state = {
             'binary': 'neutron-openvswitch-agent',
             'host': self.conf.host,
-            'topic': q_const.L2_AGENT_TOPIC,
+            'topic': n_const.L2_AGENT_TOPIC,
             'configurations': {'bridge_mappings': bridge_mappings,
                                'tunnel_types': self.tunnel_types,
                                'tunneling_ip': local_ip,
@@ -203,7 +203,7 @@ class OVSNeutronAgent(sg_rpc.SecurityGroupAgentRpcCallbackMixin,
                                self.enable_distributed_routing,
                                'log_agent_heartbeats':
                                self.conf.AGENT.log_agent_heartbeats},
-            'agent_type': q_const.AGENT_TYPE_OVS,
+            'agent_type': n_const.AGENT_TYPE_OVS,
             'start_flag': True}
 
         if tunnel_types:
@@ -288,6 +288,9 @@ class OVSNeutronAgent(sg_rpc.SecurityGroupAgentRpcCallbackMixin,
         # Initialize iteration counter
         self.iter_num = 0
         self.run_daemon_loop = True
+
+        self.catch_sigterm = False
+        self.catch_sighup = False
 
         # The initialization is complete; we can start receiving messages
         self.connection.consume_in_threads()
@@ -472,7 +475,7 @@ class OVSNeutronAgent(sg_rpc.SecurityGroupAgentRpcCallbackMixin,
                                         agent_ports, self._tunnel_port_lookup)
 
     def add_fdb_flow(self, br, port_info, remote_ip, lvm, ofport):
-        if port_info == q_const.FLOODING_ENTRY:
+        if port_info == n_const.FLOODING_ENTRY:
             lvm.tun_ofports.add(ofport)
             br.install_flood_to_tun(lvm.vlan, lvm.segmentation_id,
                                     lvm.tun_ofports)
@@ -486,7 +489,7 @@ class OVSNeutronAgent(sg_rpc.SecurityGroupAgentRpcCallbackMixin,
                                       port_info.mac_address)
 
     def del_fdb_flow(self, br, port_info, remote_ip, lvm, ofport):
-        if port_info == q_const.FLOODING_ENTRY:
+        if port_info == n_const.FLOODING_ENTRY:
             if ofport not in lvm.tun_ofports:
                 LOG.debug("attempt to remove a non-existent port %s", ofport)
                 return
@@ -922,20 +925,20 @@ class OVSNeutronAgent(sg_rpc.SecurityGroupAgentRpcCallbackMixin,
         The peer name can not exceed the maximum length allowed for a linux
         device. Longer names are hashed to help ensure uniqueness.
         """
-        if len(prefix + name) <= q_const.DEVICE_NAME_MAX_LEN:
+        if len(prefix + name) <= n_const.DEVICE_NAME_MAX_LEN:
             return prefix + name
         # We can't just truncate because bridges may be distinguished
         # by an ident at the end. A hash over the name should be unique.
         # Leave part of the bridge name on for easier identification
         hashlen = 6
-        namelen = q_const.DEVICE_NAME_MAX_LEN - len(prefix) - hashlen
+        namelen = n_const.DEVICE_NAME_MAX_LEN - len(prefix) - hashlen
         new_name = ('%(prefix)s%(truncated)s%(hash)s' %
                     {'prefix': prefix, 'truncated': name[0:namelen],
                      'hash': hashlib.sha1(name).hexdigest()[0:hashlen]})
         LOG.warning(_LW("Creating an interface named %(name)s exceeds the "
                         "%(limit)d character limitation. It was shortened to "
                         "%(new_name)s to fit."),
-                    {'name': name, 'limit': q_const.DEVICE_NAME_MAX_LEN,
+                    {'name': name, 'limit': n_const.DEVICE_NAME_MAX_LEN,
                      'new_name': new_name})
         return new_name
 
@@ -1477,7 +1480,7 @@ class OVSNeutronAgent(sg_rpc.SecurityGroupAgentRpcCallbackMixin,
         ancillary_ports = set()
         tunnel_sync = True
         ovs_restarted = False
-        while self.run_daemon_loop:
+        while self._check_and_handle_signal():
             start = time.time()
             port_stats = {'regular': {'added': 0,
                                       'updated': 0,
@@ -1614,17 +1617,26 @@ class OVSNeutronAgent(sg_rpc.SecurityGroupAgentRpcCallbackMixin,
             self.rpc_loop(polling_manager=pm)
 
     def _handle_sigterm(self, signum, frame):
-        LOG.info(_LI("Agent caught SIGTERM, quitting daemon loop."))
-        self.run_daemon_loop = False
+        self.catch_sigterm = True
         if self.quitting_rpc_timeout:
             self.set_rpc_timeout(self.quitting_rpc_timeout)
 
     def _handle_sighup(self, signum, frame):
-        LOG.info(_LI("Agent caught SIGHUP, resetting."))
-        self.conf.reload_config_files()
-        config.setup_logging()
-        LOG.debug('Full set of CONF:')
-        self.conf.log_opt_values(LOG, std_logging.DEBUG)
+        self.catch_sighup = True
+
+    def _check_and_handle_signal(self):
+        if self.catch_sigterm:
+            LOG.info(_LI("Agent caught SIGTERM, quitting daemon loop."))
+            self.run_daemon_loop = False
+            self.catch_sigterm = False
+        if self.catch_sighup:
+            LOG.info(_LI("Agent caught SIGHUP, resetting."))
+            self.conf.reload_config_files()
+            config.setup_logging()
+            LOG.debug('Full set of CONF:')
+            self.conf.log_opt_values(LOG, std_logging.DEBUG)
+            self.catch_sighup = False
+        return self.run_daemon_loop
 
     def set_rpc_timeout(self, timeout):
         for rpc_api in (self.plugin_rpc, self.sg_plugin_rpc,
@@ -1646,7 +1658,7 @@ def create_agent_config_map(config):
     :returns: a map of agent configuration parameters
     """
     try:
-        bridge_mappings = q_utils.parse_mappings(config.OVS.bridge_mappings)
+        bridge_mappings = n_utils.parse_mappings(config.OVS.bridge_mappings)
     except ValueError as e:
         raise ValueError(_("Parsing bridge_mappings failed: %s.") % e)
 

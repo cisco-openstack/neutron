@@ -202,11 +202,15 @@ class KeepalivedInstanceRoutesTestCase(base.BaseTestCase):
             keepalived.KeepalivedVirtualRoute('10.0.0.0/8', '1.0.0.1'),
             keepalived.KeepalivedVirtualRoute('20.0.0.0/8', '2.0.0.2')]
         routes.extra_routes = extra_routes
+        extra_subnets = [
+            keepalived.KeepalivedVirtualRoute(
+                '30.0.0.0/8', None, 'eth0', scope='link')]
+        routes.extra_subnets = extra_subnets
         return routes
 
     def test_routes(self):
         routes = self._get_instance_routes()
-        self.assertEqual(len(routes.routes), 4)
+        self.assertEqual(len(routes.routes), 5)
 
     def test_remove_routes_on_interface(self):
         routes = self._get_instance_routes()
@@ -221,6 +225,7 @@ class KeepalivedInstanceRoutesTestCase(base.BaseTestCase):
         ::/0 via fe80::3e97:eff:fe26:3bfa/64 dev eth1
         10.0.0.0/8 via 1.0.0.1
         20.0.0.0/8 via 2.0.0.2
+        30.0.0.0/8 dev eth0 scope link
     }"""
         routes = self._get_instance_routes()
         self.assertEqual(expected, '\n'.join(routes.build_config()))
@@ -233,7 +238,7 @@ class KeepalivedInstanceTestCase(base.BaseTestCase,
                                                  ['169.254.192.0/18'])
         self.assertEqual('169.254.0.42/24', instance.get_primary_vip())
 
-    def test_remove_adresses_by_interface(self):
+    def test_remove_addresses_by_interface(self):
         config = self._get_config()
         instance = config.get_instance(1)
         instance.remove_vips_vroutes_by_interface('eth2')

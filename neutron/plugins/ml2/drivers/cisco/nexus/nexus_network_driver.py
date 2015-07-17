@@ -19,6 +19,8 @@ Implements a Nexus-OS NETCONF over SSHv2 API Client
 
 import re
 
+from oslo.config import cfg
+
 from neutron.openstack.common import excutils
 from neutron.openstack.common.gettextutils import _LW
 from neutron.openstack.common import importutils
@@ -37,6 +39,9 @@ class CiscoNexusDriver(object):
         self.ncclient = None
         self.nexus_switches = conf.ML2MechCiscoConfig.nexus_dict
         self.connections = {}
+        self._close_ssh_session = False if (
+            (cfg.CONF.rpc_workers + cfg.CONF.api_workers) <
+            const.MAX_NEXUS_SSH_SESSIONS) else True
 
     def _import_ncclient(self):
         """Import the NETCONF client (ncclient) module.
@@ -48,6 +53,15 @@ class CiscoNexusDriver(object):
 
         """
         return importutils.import_module('ncclient.manager')
+
+    def _get_close_ssh_session(self):
+        return self._close_ssh_session
+
+    def _close_session(self, mgr, nexus_host):
+        """Close the connection to the nexus switch."""
+        if mgr:
+            self.connections.pop(nexus_host, None)
+            mgr.close_session()
 
     def _get_config(self, nexus_host, filter=''):
         """Get Nexus Host Configuration:
@@ -67,16 +81,14 @@ class CiscoNexusDriver(object):
             return data_xml
         except Exception as e:
             try:
-                if mgr:
-                    self.connections.pop(nexus_host, None)
-                    mgr.close_session()
+                self._close_session(mgr, nexus_host)
             except Exception:
                 pass
             raise cexc.NexusConfigFailed(nexus_host=nexus_host, config=filter,
                                          exc=e)
 
     def _edit_config(self, nexus_host, target='running', config='',
-                     allowed_exc_strs=None):
+                     allowed_exc_strs=None, check_to_close_session=True):
         """Modify switch config for a target config type.
 
         :param nexus_host: IP address of switch to configure
@@ -85,6 +97,8 @@ class CiscoNexusDriver(object):
         :param allowed_exc_strs: Exceptions which have any of these strings
                                  as a subset of their exception message
                                  (str(exception)) can be ignored
+        :param check_to_close_session: Set to False when configured to close
+                                       the ssh session is not to be checked.
 
         :raises: NexusConfigFailed: if _edit_config() encountered an exception
                                     not containing one of allowed_exc_strs
@@ -105,9 +119,7 @@ class CiscoNexusDriver(object):
                 if exc_str in unicode(e):
                     return
             try:
-                if mgr:
-                    self.connections.pop(nexus_host, None)
-                    mgr.close_session()
+                self._close_session(mgr, nexus_host)
             except Exception:
                 pass
 
@@ -115,6 +127,10 @@ class CiscoNexusDriver(object):
             # the original ncclient exception.
             raise cexc.NexusConfigFailed(nexus_host=nexus_host, config=config,
                                          exc=e)
+
+        # if configured, close the ncclient ssh session.
+        if check_to_close_session and self._get_close_ssh_session():
+            self._close_session(mgr, nexus_host)
 
     def nxos_connect(self, nexus_host):
         """Make SSH connection to the Nexus Switch."""
@@ -126,6 +142,7 @@ class CiscoNexusDriver(object):
         nexus_ssh_port = int(self.nexus_switches[nexus_host, 'ssh_port'])
         nexus_user = self.nexus_switches[nexus_host, const.USERNAME]
         nexus_password = self.nexus_switches[nexus_host, const.PASSWORD]
+        hostkey_verify = cfg.CONF.ml2_cisco.host_key_checks
         try:
             try:
                 # With new ncclient version, we can pass device_params...
@@ -133,6 +150,7 @@ class CiscoNexusDriver(object):
                                             port=nexus_ssh_port,
                                             username=nexus_user,
                                             password=nexus_password,
+                                            hostkey_verify=hostkey_verify,
                                             device_params={"name": "nexus"})
             except TypeError:
                 # ... but if that causes an error, we appear to have the old
@@ -140,7 +158,8 @@ class CiscoNexusDriver(object):
                 man = self.ncclient.connect(host=nexus_host,
                                             port=nexus_ssh_port,
                                             username=nexus_user,
-                                            password=nexus_password)
+                                            password=nexus_password,
+                                            hostkey_verify=hostkey_verify)
         except Exception as e:
             # Raise a Neutron exception. Include a description of
             # the original ncclient exception.
@@ -242,7 +261,8 @@ class CiscoNexusDriver(object):
         LOG.debug("NexusDriver: ")
 
         self._edit_config(nexus_host, target='running', config=confstr,
-                          allowed_exc_strs=["VLAN with the same name exists"])
+                          allowed_exc_strs=["VLAN with the same name exists"],
+                          check_to_close_session=False)
 
         # Enable VLAN active and no-shutdown states. Some versions of
         # Nexus switch do not allow state changes for the extended VLAN
@@ -251,13 +271,16 @@ class CiscoNexusDriver(object):
         for snippet in [snipp.CMD_VLAN_ACTIVE_SNIPPET,
                         snipp.CMD_VLAN_NO_SHUTDOWN_SNIPPET]:
             try:
+                check_to_close_session = False if (
+                    snippet == snipp.CMD_VLAN_ACTIVE_SNIPPET) else True
                 confstr = self.create_xml_snippet(snippet % vlanid)
                 self._edit_config(
                     nexus_host,
                     target='running',
                     config=confstr,
                     allowed_exc_strs=["Can't modify state for extended",
-                                      "Command is only allowed on VLAN"])
+                                      "Command is only allowed on VLAN"],
+                    check_to_close_session=check_to_close_session)
             except cexc.NexusConfigFailed:
                 with excutils.save_and_reraise_exception():
                     self.delete_vlan(nexus_host, vlanid)

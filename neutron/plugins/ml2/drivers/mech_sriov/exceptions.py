@@ -1,5 +1,5 @@
-# Copyright 2011 OpenStack Foundation.
-# All rights reserved.
+# Copyright (c) 2014 OpenStack Foundation
+# All Rights Reserved.
 #
 #    Licensed under the Apache License, Version 2.0 (the "License"); you may
 #    not use this file except in compliance with the License. You may obtain
@@ -12,28 +12,12 @@
 #    WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the
 #    License for the specific language governing permissions and limitations
 #    under the License.
-#
+
+"""Exceptions used by SRIOV Mechanism Driver."""
+
+from neutron.common import exceptions
 
 
-CREDENTIAL_USERNAME = 'user_name'
-CREDENTIAL_PASSWORD = 'password'
-
-USERNAME = 'username'
-PASSWORD = 'password'
-
-NETWORK_ADMIN = 'network_admin'
-
-NVE_INT_NUM = '1'
-NEXUS_MAX_VLAN_NAME_LEN = 32
-
-NO_DUPLICATE = 0
-DUPLICATE_VLAN = 1
-DUPLICATE_PORT = 2
-
-NEXUS_TYPE_INVALID = -1
-NEXUS_3K = 3
-NEXUS_5K = 5
-NEXUS_7K = 7
-NEXUS_9K = 9
-
-MAX_NEXUS_SSH_SESSIONS = 8
+class SriovUnsupportedNetworkType(exceptions.NeutronException):
+    """Method was invoked for unsupported network type."""
+    message = _("Unsupported network type %(net_type)s.")

@@ -60,6 +60,8 @@ OPTS = [
         help=_('Limit number of leases to prevent a denial-of-service.')),
     cfg.BoolOpt('dhcp_broadcast_reply', default=False,
                 help=_("Use broadcast in DHCP replies")),
+    cfg.BoolOpt('always_use_metadata', default=False,
+                help=_("Use metadata for all the dnsmasq cases")),
 ]
 
 IPV4 = 4
@@ -76,6 +78,7 @@ METADATA_DEFAULT_CIDR = '%s/%d' % (METADATA_DEFAULT_IP,
 METADATA_PORT = 80
 WIN2k3_STATIC_DNS = 249
 NS_PREFIX = 'qdhcp-'
+DNSMASQ_SERVICE_NAME = 'dnsmasq'
 
 
 class DictModel(dict):
@@ -136,11 +139,12 @@ class NetModel(DictModel):
 @six.add_metaclass(abc.ABCMeta)
 class DhcpBase(object):
 
-    def __init__(self, conf, network, root_helper='sudo',
+    def __init__(self, conf, network, process_monitor, root_helper='sudo',
                  version=None, plugin=None):
         self.conf = conf
         self.network = network
         self.root_helper = root_helper
+        self.process_monitor = process_monitor
         self.device_manager = DeviceManager(self.conf,
                                             self.root_helper, plugin)
         self.version = version
@@ -210,21 +214,18 @@ class DhcpLocalProcess(DhcpBase):
 
     def disable(self, retain_port=False):
         """Disable DHCP for this network by killing the local process."""
-        pid = self.pid
+        pid_filename = self.get_conf_file_name('pid')
 
-        if pid:
-            if self.active:
-                cmd = ['kill', '-9', pid]
-                utils.execute(cmd, self.root_helper)
-            else:
-                LOG.debug(_('DHCP for %(net_id)s is stale, pid %(pid)d '
-                            'does not exist, performing cleanup'),
-                          {'net_id': self.network.id, 'pid': pid})
-            if not retain_port:
-                self.device_manager.destroy(self.network,
-                                            self.interface_name)
-        else:
-            LOG.debug(_('No DHCP started for %s'), self.network.id)
+        pid = self.process_monitor.get_pid(uuid=self.network.id,
+                                           service=DNSMASQ_SERVICE_NAME,
+                                           specific_pid_file=pid_filename)
+
+        self.process_monitor.disable(uuid=self.network.id,
+                                     namespace=self.network.namespace,
+                                     service=DNSMASQ_SERVICE_NAME,
+                                     specific_pid_file=pid_filename)
+        if pid and not retain_port:
+            self.device_manager.destroy(self.network, self.interface_name)
 
         self._remove_config_files()
 
@@ -271,24 +272,6 @@ class DhcpLocalProcess(DhcpBase):
         return None
 
     @property
-    def pid(self):
-        """Last known pid for the DHCP process spawned for this network."""
-        return self._get_value_from_conf_file('pid', int)
-
-    @property
-    def active(self):
-        pid = self.pid
-        if pid is None:
-            return False
-
-        cmdline = '/proc/%s/cmdline' % pid
-        try:
-            with open(cmdline, "r") as f:
-                return self.network.id in f.readline()
-        except IOError:
-            return False
-
-    @property
     def interface_name(self):
         return self._get_value_from_conf_file('interface')
 
@@ -297,6 +280,13 @@ class DhcpLocalProcess(DhcpBase):
         interface_file_path = self.get_conf_file_name('interface',
                                                       ensure_conf_dir=True)
         utils.replace_file(interface_file_path, value)
+
+    @property
+    def active(self):
+        pid_filename = self.get_conf_file_name('pid')
+        return self.process_monitor.is_active(self.network.id,
+                                              DNSMASQ_SERVICE_NAME,
+                                              specific_pid_file=pid_filename)
 
     @abc.abstractmethod
     def spawn_process(self):
@@ -357,12 +347,7 @@ class Dnsmasq(DhcpLocalProcess):
             if uuidutils.is_uuid_like(c)
         ]
 
-    def spawn_process(self):
-        """Spawns a Dnsmasq process for the network."""
-        env = {
-            self.NEUTRON_NETWORK_ID_KEY: self.network.id,
-        }
-
+    def _build_cmdline_callback(self, pid_file):
         cmd = [
             'dnsmasq',
             '--no-hosts',
@@ -371,11 +356,12 @@ class Dnsmasq(DhcpLocalProcess):
             '--bind-interfaces',
             '--interface=%s' % self.interface_name,
             '--except-interface=lo',
-            '--pid-file=%s' % self.get_conf_file_name(
-                'pid', ensure_conf_dir=True),
-            '--dhcp-hostsfile=%s' % self._output_hosts_file(),
-            '--addn-hosts=%s' % self._output_addn_hosts_file(),
-            '--dhcp-optsfile=%s' % self._output_opts_file(),
+            '--pid-file=%s' % pid_file,
+            '--dhcp-hostsfile=%s' % self._get_hosts_filename(),
+            '--addn-hosts=%s' % self._get_addn_hosts_filename(),
+            '--dhcp-optsfile=%s' % self._get_opts_filename(),
+            '--leasefile-ro',
+            '--dhcp-authoritative',
             '--dhcp-leasefile=%s' % self._output_init_lease_file(),
         ]
 
@@ -434,9 +420,29 @@ class Dnsmasq(DhcpLocalProcess):
         if self.conf.dhcp_broadcast_reply:
             cmd.append('--dhcp-broadcast')
 
-        ip_wrapper = ip_lib.IPWrapper(self.root_helper,
-                                      self.network.namespace)
-        ip_wrapper.netns.execute(cmd, addl_env=env)
+        return cmd
+
+    def _build_dnsmasq_env(self):
+        env = {
+            self.NEUTRON_NETWORK_ID_KEY: self.network.id,
+        }
+        return env
+
+    def spawn_process(self, reload_cfg=False):
+        """Spawns or reloads a Dnsmasq process for the network."""
+
+        self._output_config_files()
+
+        pid_filename = self.get_conf_file_name('pid')
+
+        self.process_monitor.enable(
+            uuid=self.network.id,
+            cmd_callback=self._build_cmdline_callback,
+            namespace=self.network.namespace,
+            service=DNSMASQ_SERVICE_NAME,
+            cmd_addl_env=self._build_dnsmasq_env(),
+            reload_cfg=reload_cfg,
+            specific_pid_file=pid_filename)
 
     def _release_lease(self, mac_address, ip):
         """Release a DHCP lease."""
@@ -444,6 +450,11 @@ class Dnsmasq(DhcpLocalProcess):
         ip_wrapper = ip_lib.IPWrapper(self.root_helper,
                                       self.network.namespace)
         ip_wrapper.netns.execute(cmd)
+
+    def _output_config_files(self):
+        self._output_hosts_file()
+        self._output_addn_hosts_file()
+        self._output_opts_file()
 
     def reload_allocations(self):
         """Rebuild the dnsmasq config and signal the dnsmasq to reload."""
@@ -456,15 +467,8 @@ class Dnsmasq(DhcpLocalProcess):
             return
 
         self._release_unused_leases()
-        self._output_hosts_file()
-        self._output_addn_hosts_file()
-        self._output_opts_file()
-        if self.active:
-            cmd = ['kill', '-HUP', self.pid]
-            utils.execute(cmd, self.root_helper)
-        else:
-            LOG.debug(_('Pid %d is stale, relaunching dnsmasq'), self.pid)
-        LOG.debug(_('Reloading allocations for network: %s'), self.network.id)
+        self.spawn_process(reload_cfg=True)
+        LOG.debug('Reloading allocations for network: %s', self.network.id)
         self.device_manager.update(self.network, self.interface_name)
 
     def _iter_hosts(self):
@@ -572,7 +576,7 @@ class Dnsmasq(DhcpLocalProcess):
         defined by the `_output_addn_hosts_file` method.
         """
         buf = six.StringIO()
-        filename = self.get_conf_file_name('host')
+        filename = self._get_hosts_filename()
 
         LOG.debug(_('Building host file: %s'), filename)
         # NOTE(ihrachyshka): the loop should not log anything inside it, to
@@ -609,7 +613,7 @@ class Dnsmasq(DhcpLocalProcess):
         return leases
 
     def _release_unused_leases(self):
-        filename = self.get_conf_file_name('host')
+        filename = self._get_hosts_filename()
         old_leases = self._read_hosts_file_leases(filename)
 
         new_leases = set()
@@ -619,6 +623,9 @@ class Dnsmasq(DhcpLocalProcess):
 
         for ip, mac in old_leases - new_leases:
             self._release_lease(mac, ip)
+
+    def _get_hosts_filename(self):
+        return self.get_conf_file_name('host')
 
     def _output_addn_hosts_file(self):
         """Writes a dnsmasq compatible additional hosts file.
@@ -636,9 +643,12 @@ class Dnsmasq(DhcpLocalProcess):
             # order to obtain it in PTR responses.
             if alloc:
                 buf.write('%s\t%s %s\n' % (alloc.ip_address, fqdn, hostname))
-        addn_hosts = self.get_conf_file_name('addn_hosts')
+        addn_hosts = self._get_addn_hosts_filename()
         utils.replace_file(addn_hosts, buf.getvalue())
         return addn_hosts
+
+    def _get_addn_hosts_filename(self):
+        return self.get_conf_file_name('addn_hosts')
 
     def _output_opts_file(self):
         """Write a dnsmasq compatible options file."""
@@ -684,9 +694,10 @@ class Dnsmasq(DhcpLocalProcess):
 
             # Add host routes for isolated network segments
 
-            if (isolated_subnets[subnet.id] and
+            if (self.conf.always_use_metadata or
+                (isolated_subnets[subnet.id] and
                     self.conf.enable_isolated_metadata and
-                    subnet.ip_version == 4):
+                    subnet.ip_version == 4)):
                 subnet_dhcp_ip = subnet_to_interface_ip[subnet.id]
                 host_routes.append(
                     '%s/32,%s' % (METADATA_DEFAULT_IP, subnet_dhcp_ip)
@@ -751,9 +762,12 @@ class Dnsmasq(DhcpLocalProcess):
                                 Dnsmasq._convert_to_literal_addrs(ip_version,
                                                                   vx_ips))))
 
-        name = self.get_conf_file_name('opts')
+        name = self._get_opts_filename()
         utils.replace_file(name, '\n'.join(options))
         return name
+
+    def _get_opts_filename(self):
+        return self.get_conf_file_name('opts')
 
     def _make_subnet_interface_ip_map(self):
         ip_dev = ip_lib.IPDevice(
@@ -833,6 +847,9 @@ class Dnsmasq(DhcpLocalProcess):
         providing access to the metadata service via logical routers built
         with 3rd party backends.
         """
+        if conf.always_use_metadata:
+            return True
+
         if conf.enable_metadata_network and conf.enable_isolated_metadata:
             # check if the network has a metadata subnet
             meta_cidr = netaddr.IPNetwork(METADATA_DEFAULT_CIDR)

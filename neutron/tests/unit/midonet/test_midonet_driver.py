@@ -41,11 +41,13 @@ class TestDhcpNoOpDriver(base.BaseTestCase):
         self.mock_mgr = instance.start()
 
     def test_disable_no_retain_port(self):
-        dhcp_driver = driver.DhcpNoOpDriver(self.conf, FakeNetwork())
+        dhcp_driver = driver.DhcpNoOpDriver(self.conf, FakeNetwork(),
+                                            mock.Mock())
         dhcp_driver.disable(retain_port=False)
         self.assertTrue(self.mock_mgr.return_value.destroy.called)
 
     def test_disable_retain_port(self):
-        dhcp_driver = driver.DhcpNoOpDriver(self.conf, FakeNetwork())
+        dhcp_driver = driver.DhcpNoOpDriver(self.conf, FakeNetwork(),
+                                            mock.Mock())
         dhcp_driver.disable(retain_port=True)
         self.assertFalse(self.mock_mgr.return_value.destroy.called)

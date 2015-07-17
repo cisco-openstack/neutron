@@ -19,6 +19,7 @@ import mock
 from neutron.agent.common import config as agent_config
 from neutron.agent import l3_agent
 from neutron.agent import l3_ha_agent
+from neutron.agent.linux import external_process
 from neutron.agent.linux import interface
 from neutron.common import config as base_config
 from neutron.common import constants as l3_constants
@@ -43,6 +44,7 @@ class TestVarmourRouter(base.BaseTestCase):
         agent_config.register_interface_driver_opts_helper(self.conf)
         agent_config.register_use_namespaces_opts_helper(self.conf)
         agent_config.register_root_helper(self.conf)
+        self.conf.register_opts(external_process.OPTS)
         self.conf.register_opts(interface.OPTS)
         self.conf.set_override('interface_driver',
                                'neutron.agent.linux.interface.NullDriver')

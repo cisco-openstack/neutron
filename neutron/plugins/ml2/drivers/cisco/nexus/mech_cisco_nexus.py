@@ -17,6 +17,8 @@
 ML2 Mechanism Driver for Cisco Nexus platforms.
 """
 
+import eventlet
+import os
 import threading
 
 from oslo.config import cfg
@@ -40,6 +42,12 @@ from neutron.plugins.ml2.drivers.cisco.nexus import nexus_network_driver
 LOG = logging.getLogger(__name__)
 
 HOST_NOT_FOUND = _LW("Host %s not defined in switch configuration section.")
+
+# Delay the start of the monitor thread to avoid problems with Neutron server
+# process forking. One problem observed was ncclient RPC sync close_session
+# call hanging during initial _monitor_thread() processing to replay existing
+# database.
+DELAY_MONITOR_THREAD = 30
 
 
 class CiscoNexusCfgMonitor(object):
@@ -138,10 +146,19 @@ class CiscoNexusCfgMonitor(object):
                     self.replay_config(switch_ip)
                     # If replay failed, it stops trying to configure db entries
                     # and sets switch state to False so this caller knows
-                    # it failed.
+                    # it failed.  If it did fail, we increment the
+                    # retry counter else reset it to 0.
                     if self._mdriver.get_switch_ip_and_active_state(
                         switch_ip) is False:
                         self._mdriver.incr_switch_retry_count(switch_ip)
+                        LOG.warn(_LW("Replay config failed for "
+                            "ip %(switch_ip)s"),
+                            {'switch_ip': switch_ip})
+                    else:
+                        self._mdriver.reset_switch_retry_count(switch_ip)
+                        LOG.info(_LI("Replay config successful for "
+                            "ip %(switch_ip)s"),
+                            {'switch_ip': switch_ip})
 
 
 class CiscoNexusMechanismDriver(api.MechanismDriver):
@@ -160,13 +177,17 @@ class CiscoNexusMechanismDriver(api.MechanismDriver):
 
         self.driver = nexus_network_driver.CiscoNexusDriver()
 
+        # This method is only called once regardless of number of
+        # api/rpc workers defined.
+        self._ppid = os.getpid()
+
         self.monitor = CiscoNexusCfgMonitor(self.driver, self)
         self.timer = None
         self.monitor_timeout = conf.cfg.CONF.ml2_cisco.switch_heartbeat_time
         self.monitor_lock = threading.Lock()
         # Start the monitor thread
         if self.monitor_timeout > 0:
-            self._monitor_thread()
+            eventlet.spawn_after(DELAY_MONITOR_THREAD, self._monitor_thread)
 
     def set_switch_ip_and_active_state(self, switch_ip, state):
         self._switch_state[switch_ip, '_connect_active'] = state
@@ -215,7 +236,7 @@ class CiscoNexusMechanismDriver(api.MechanismDriver):
         return switch_connections
 
     def is_switch_configurable(self, switch_ip):
-        if self.monitor_timeout > 0:
+        if self.monitor_timeout > 0 and self._ppid == os.getpid():
             return self.get_switch_ip_and_active_state(switch_ip)
         else:
             return True

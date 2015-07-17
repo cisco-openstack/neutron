@@ -23,6 +23,10 @@ class TestProcessManager(base.BaseTestCase):
         super(TestProcessManager, self).setUp()
         self.execute_p = mock.patch('neutron.agent.linux.utils.execute')
         self.execute = self.execute_p.start()
+        self.delete_if_exists = mock.patch(
+            'neutron.openstack.common.fileutils.delete_if_exists').start()
+        self.makedirs = mock.patch('os.makedirs').start()
+
         self.conf = mock.Mock()
         self.conf.external_pids = '/var/path'
 
@@ -37,8 +41,8 @@ class TestProcessManager(base.BaseTestCase):
 
                 manager = ep.ProcessManager(self.conf, 'uuid')
                 manager.enable(callback)
+                self.assertTrue(self.makedirs.called)
                 callback.assert_called_once_with('pidfile')
-                name.assert_called_once_with(ensure_pids_dir=True)
                 self.execute.assert_called_once_with(['the', 'cmd'],
                                                      root_helper='sudo',
                                                      check_exit_code=True,
@@ -57,7 +61,7 @@ class TestProcessManager(base.BaseTestCase):
                 with mock.patch.object(ep, 'ip_lib') as ip_lib:
                     manager.enable(callback)
                     callback.assert_called_once_with('pidfile')
-                    name.assert_called_once_with(ensure_pids_dir=True)
+                    self.assertTrue(self.makedirs.called)
                     ip_lib.assert_has_calls([
                         mock.call.IPWrapper('sudo', 'ns'),
                         mock.call.IPWrapper().netns.execute(['the', 'cmd'],
@@ -122,23 +126,23 @@ class TestProcessManager(base.BaseTestCase):
         with mock.patch.object(ep.utils.os.path, 'isdir') as isdir:
             isdir.return_value = True
             manager = ep.ProcessManager(self.conf, 'uuid')
-            retval = manager.get_pid_file_name(ensure_pids_dir=True)
+            retval = manager.get_pid_file_name()
             self.assertEqual(retval, '/var/path/uuid.pid')
 
     def test_get_pid_file_name_not_existing(self):
         with mock.patch.object(ep.utils.os.path, 'isdir') as isdir:
-            with mock.patch.object(ep.utils.os, 'makedirs') as makedirs:
-                isdir.return_value = False
-                manager = ep.ProcessManager(self.conf, 'uuid')
-                retval = manager.get_pid_file_name(ensure_pids_dir=True)
-                self.assertEqual(retval, '/var/path/uuid.pid')
-                makedirs.assert_called_once_with('/var/path', 0o755)
+            isdir.return_value = False
+            manager = ep.ProcessManager(self.conf, 'uuid')
+            manager.ensure_pids_dir()
+            retval = manager.get_pid_file_name()
+            self.assertEqual(retval, '/var/path/uuid.pid')
+            self.makedirs.assert_called_once_with('/var/path', 0o755)
 
     def test_get_pid_file_name_default(self):
         with mock.patch.object(ep.utils.os.path, 'isdir') as isdir:
             isdir.return_value = True
             manager = ep.ProcessManager(self.conf, 'uuid')
-            retval = manager.get_pid_file_name(ensure_pids_dir=False)
+            retval = manager.get_pid_file_name()
             self.assertEqual(retval, '/var/path/uuid.pid')
             self.assertFalse(isdir.called)
 

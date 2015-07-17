@@ -299,6 +299,14 @@ vrrp_instance VR_2 {
             'MASTER', 'eth0', 1, '169.254.192.0/18')
         self.assertEqual(expected, '\n'.join(instance.build_config()))
 
+    def test_add_multiple_vips_fails(self):
+        instance = keepalived.KeepalivedInstance(
+            'MASTER', 'eth0', 1, '169.254.192.0/18')
+        instance.add_vip('192.168.222.1/32', 'eth11', 'link')
+        self.assertRaises(
+            keepalived.VIPDuplicateAddressException,
+            instance.add_vip, '192.168.222.1/32', 'eth11', 'link')
+
 
 class KeepalivedVipAddressTestCase(base.BaseTestCase):
     def test_vip_with_scope(self):

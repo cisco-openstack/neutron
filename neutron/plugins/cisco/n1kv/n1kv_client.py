@@ -105,8 +105,11 @@ class Client(object):
     # Define paths for the URI where the client connects for HTTP requests.
     port_profiles_path = "/virtual-port-profile"
     network_segment_path = "/network-segment/%s"
+    network_segments_path = "/network-segment"
     network_segment_pool_path = "/network-segment-pool/%s"
+    network_segment_pools_path = "/network-segment-pool"
     ip_pool_path = "/ip-pool-template/%s"
+    ip_pools_path = "/ip-pool-template"
     ports_path = "/kvm/vm-network/%s/ports"
     port_path = "/kvm/vm-network/%s/ports/%s"
     vm_networks_path = "/kvm/vm-network"
@@ -129,8 +132,7 @@ class Client(object):
         self.timeout = c_conf.CISCO_N1K.http_timeout
 
     def list_port_profiles(self):
-        """
-        Fetch all policy profiles from the VSM.
+        """Fetch all policy profiles from the VSM.
 
         :returns: JSON string
         """
@@ -159,6 +161,20 @@ class Client(object):
         :param name: name of the bridge domain to be deleted
         """
         return self._delete(self.bridge_domain_path % name)
+
+    def list_networks(self):
+        """Fetch all network segments from the VSM.
+
+        :returns: JSON
+        """
+        return self._get(self.network_segments_path)
+
+    def show_network(self, network_id):
+        """Fetch network information for the given network UUID.
+
+        :param network_id: UUID representing the network to be fetched
+        """
+        return self._get(self.network_segment_path % network_id)
 
     def create_network_segment(self, network, network_profile):
         """
@@ -238,6 +254,10 @@ class Client(object):
         return self._delete(
             self.logical_network_path % logical_network_name)
 
+    def list_network_profiles(self):
+        """List network profiles from the VSM."""
+        return self._get(self.network_segment_pools_path)
+
     def create_network_segment_pool(self, network_profile, tenant_id):
         """
         Create a network segment pool on the VSM.
@@ -279,6 +299,10 @@ class Client(object):
         """
         return self._delete(self.network_segment_pool_path %
                             network_segment_pool_id)
+
+    def list_subnets(self):
+        """List subnets from the VSM."""
+        return self._get(self.ip_pools_path)
 
     def create_ip_pool(self, subnet):
         """
@@ -338,6 +362,11 @@ class Client(object):
         """
         return self._delete(self.ip_pool_path % subnet_id)
 
+    def list_vmnetworks(self):
+        """List vm networkss from the VSM."""
+        LOG.debug("list_vmnetworks")
+        return self._get(self.vm_networks_path)
+
     def create_vm_network(self,
                           port,
                           vm_network_name,
@@ -371,6 +400,15 @@ class Client(object):
         :param vm_network_name: name of the VM network
         """
         return self._delete(self.vm_network_path % vm_network_name)
+
+    def list_ports(self, vm_network_name):
+        """List ports from the VSM.
+
+        :param vm_network_name: String representing name of the VM Network
+        :returns: JSON
+        """
+        LOG.debug("list_ports")
+        return self._get(self.ports_path % vm_network_name)
 
     def create_n1kv_port(self, port, vm_network_name):
         """

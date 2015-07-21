@@ -751,6 +751,8 @@ class TestDnsmasq(TestBase):
             '--dhcp-hostsfile=/dhcp/%s/host' % network.id,
             '--addn-hosts=/dhcp/%s/addn_hosts' % network.id,
             '--dhcp-optsfile=/dhcp/%s/opts' % network.id,
+            '--leasefile-ro',
+            '--dhcp-authoritative',
             '--dhcp-leasefile=/dhcp/%s/leases' % network.id]
 
         seconds = ''
@@ -884,6 +886,7 @@ class TestDnsmasq(TestBase):
         with mock.patch.object(dhcp.Dnsmasq, 'get_conf_file_name') as conf_fn:
             conf_fn.return_value = '/foo/leases'
             dm = dhcp.Dnsmasq(self.conf, FakeDualNetwork(),
+                              process_monitor=None,
                               version=dhcp.Dnsmasq.MINIMUM_VERSION)
             dm._output_init_lease_file()
         self.safe.assert_called_once_with('/foo/leases', expected)
@@ -1370,6 +1373,7 @@ tag:tag0,option:router""".lstrip()
 
     def test__output_hosts_file_log_only_twice(self):
         dm = dhcp.Dnsmasq(self.conf, FakeDualStackNetworkSingleDHCP(),
+                          process_monitor=None,
                           version=dhcp.Dnsmasq.MINIMUM_VERSION)
         with mock.patch.object(dhcp.LOG, 'process') as process:
             process.return_value = ('fake_message', {})

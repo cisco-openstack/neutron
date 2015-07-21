@@ -38,7 +38,7 @@ DIRECTION_IP_PREFIX = {'ingress': 'source_ip_prefix',
 IPSET_DIRECTION = {INGRESS_DIRECTION: 'src',
                    EGRESS_DIRECTION: 'dst'}
 LINUX_DEV_LEN = 14
-IPSET_CHAIN_LEN = 17
+IPSET_CHAIN_LEN = 20
 IPSET_CHANGE_BULK_THRESHOLD = 10
 IPSET_ADD_BULK_THRESHOLD = 5
 comment_rule = iptables_manager.comment_rule
@@ -232,12 +232,12 @@ class IptablesFirewallDriver(firewall.FirewallDriver):
                     # of the list after the allowed_address_pair rules.
                     table.add_rule(chain_name,
                                    '-m mac --mac-source %s -j RETURN'
-                                   % mac.upper(), comment=ic.PAIR_ALLOW)
+                                   % mac, comment=ic.PAIR_ALLOW)
                 else:
                     table.add_rule(chain_name,
-                                   '-m mac --mac-source %s -s %s -j RETURN'
-                                   % (mac.upper(), ip), comment=ic.PAIR_ALLOW)
-            table.add_rule(chain_name, '-j DROP', comment=ic.PAIR_DROP)
+                                   '-s %s -m mac --mac-source %s -j RETURN'
+                                   % (ip, mac.upper()), comment=ic.PAIR_ALLOW)
+            table.add_rule(chain_name, '-j DROP')
             rules.append('-j $%s' % chain_name)
 
     def _build_ipv4v6_mac_ip_list(self, mac, ip_address, mac_ipv4_pairs,

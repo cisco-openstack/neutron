@@ -66,7 +66,7 @@ class IptablesFirewallTestCase(BaseIptablesFirewallTestCase):
 
     def _fake_port(self):
         return {'device': 'tapfake_dev',
-                'mac_address': 'ff:ff:ff:ff:ff:ff',
+                'mac_address': 'FF:FF:FF:FF:FF:FF',
                 'fixed_ips': [FAKE_IP['IPv4'],
                               FAKE_IP['IPv6']]}
 
@@ -115,12 +115,11 @@ class IptablesFirewallTestCase(BaseIptablesFirewallTestCase):
                                     comment=ic.INPUT_TO_SG),
                  mock.call.add_chain('sfake_dev'),
                  mock.call.add_rule(
-                     'sfake_dev', '-m mac --mac-source ff:ff:ff:ff:ff:ff '
-                     '-s 10.0.0.1 -j RETURN',
+                     'sfake_dev', '-s 10.0.0.1 -m mac --mac-source '
+                     'FF:FF:FF:FF:FF:FF -j RETURN',
                      comment=ic.PAIR_ALLOW),
                  mock.call.add_rule(
-                     'sfake_dev', '-j DROP',
-                     comment=ic.PAIR_DROP),
+                     'sfake_dev', '-j DROP'),
                  mock.call.add_rule(
                      'ofake_dev',
                      '-p udp -m udp --sport 68 --dport 67 -j RETURN',
@@ -956,12 +955,11 @@ class IptablesFirewallTestCase(BaseIptablesFirewallTestCase):
                   mock.call.add_chain('sfake_dev'),
                   mock.call.add_rule(
                       'sfake_dev',
-                      '-m mac --mac-source ff:ff:ff:ff:ff:ff -s %s -j RETURN'
+                      '-s %s -m mac --mac-source FF:FF:FF:FF:FF:FF -j RETURN'
                       % prefix,
                       comment=ic.PAIR_ALLOW),
                   mock.call.add_rule(
-                      'sfake_dev', '-j DROP',
-                      comment=ic.PAIR_DROP)]
+                      'sfake_dev', '-j DROP')]
         calls += dhcp_rule
         calls.append(mock.call.add_rule('ofake_dev', '-j $sfake_dev',
                                         comment=None))
@@ -1055,12 +1053,11 @@ class IptablesFirewallTestCase(BaseIptablesFirewallTestCase):
                  mock.call.add_chain('sfake_dev'),
                  mock.call.add_rule(
                      'sfake_dev',
-                     '-m mac --mac-source ff:ff:ff:ff:ff:ff -s 10.0.0.1 '
+                     '-s 10.0.0.1 -m mac --mac-source FF:FF:FF:FF:FF:FF '
                      '-j RETURN',
                      comment=ic.PAIR_ALLOW),
                  mock.call.add_rule(
-                     'sfake_dev', '-j DROP',
-                     comment=ic.PAIR_DROP),
+                     'sfake_dev', '-j DROP'),
                  mock.call.add_rule(
                      'ofake_dev',
                      '-p udp -m udp --sport 68 --dport 67 -j RETURN',
@@ -1127,12 +1124,11 @@ class IptablesFirewallTestCase(BaseIptablesFirewallTestCase):
                  mock.call.add_chain('sfake_dev'),
                  mock.call.add_rule(
                      'sfake_dev',
-                     '-m mac --mac-source ff:ff:ff:ff:ff:ff -s 10.0.0.1 '
+                     '-s 10.0.0.1 -m mac --mac-source FF:FF:FF:FF:FF:FF '
                      '-j RETURN',
                      comment=ic.PAIR_ALLOW),
                  mock.call.add_rule(
-                     'sfake_dev', '-j DROP',
-                     comment=ic.PAIR_DROP),
+                     'sfake_dev', '-j DROP'),
                  mock.call.add_rule(
                      'ofake_dev',
                      '-p udp -m udp --sport 68 --dport 67 -j RETURN',
@@ -1252,7 +1248,7 @@ class IptablesFirewallTestCase(BaseIptablesFirewallTestCase):
 
     def test_ip_spoofing_filter_with_multiple_ips(self):
         port = {'device': 'tapfake_dev',
-                'mac_address': 'ff:ff:ff:ff:ff:ff',
+                'mac_address': 'FF:FF:FF:FF:FF:FF',
                 'fixed_ips': ['10.0.0.1', 'fe80::1', '10.0.0.2']}
         self.firewall.prepare_port_filter(port)
         calls = [mock.call.add_chain('sg-fallback'),
@@ -1296,17 +1292,16 @@ class IptablesFirewallTestCase(BaseIptablesFirewallTestCase):
                  mock.call.add_chain('sfake_dev'),
                  mock.call.add_rule(
                      'sfake_dev',
-                     '-m mac --mac-source ff:ff:ff:ff:ff:ff -s 10.0.0.1 '
+                     '-s 10.0.0.1 -m mac --mac-source FF:FF:FF:FF:FF:FF '
                      '-j RETURN',
                      comment=ic.PAIR_ALLOW),
                  mock.call.add_rule(
                      'sfake_dev',
-                     '-m mac --mac-source ff:ff:ff:ff:ff:ff -s 10.0.0.2 '
+                     '-s 10.0.0.2 -m mac --mac-source FF:FF:FF:FF:FF:FF '
                      '-j RETURN',
                      comment=ic.PAIR_ALLOW),
                  mock.call.add_rule(
-                     'sfake_dev', '-j DROP',
-                     comment=ic.PAIR_DROP),
+                     'sfake_dev', '-j DROP'),
                  mock.call.add_rule(
                      'ofake_dev',
                      '-p udp -m udp --sport 68 --dport 67 -j RETURN',
@@ -1331,7 +1326,7 @@ class IptablesFirewallTestCase(BaseIptablesFirewallTestCase):
 
     def test_ip_spoofing_no_fixed_ips(self):
         port = {'device': 'tapfake_dev',
-                'mac_address': 'ff:ff:ff:ff:ff:ff',
+                'mac_address': 'FF:FF:FF:FF:FF:FF',
                 'fixed_ips': []}
         self.firewall.prepare_port_filter(port)
         calls = [mock.call.add_chain('sg-fallback'),
@@ -1375,11 +1370,10 @@ class IptablesFirewallTestCase(BaseIptablesFirewallTestCase):
                  mock.call.add_chain('sfake_dev'),
                  mock.call.add_rule(
                      'sfake_dev',
-                     '-m mac --mac-source ff:ff:ff:ff:ff:ff -j RETURN',
+                     '-m mac --mac-source FF:FF:FF:FF:FF:FF -j RETURN',
                      comment=ic.PAIR_ALLOW),
                  mock.call.add_rule(
-                     'sfake_dev', '-j DROP',
-                     comment=ic.PAIR_DROP),
+                     'sfake_dev', '-j DROP'),
                  mock.call.add_rule(
                      'ofake_dev',
                      '-p udp -m udp --sport 68 --dport 67 -j RETURN',
@@ -1411,7 +1405,7 @@ class IptablesFirewallEnhancedIpsetTestCase(BaseIptablesFirewallTestCase):
 
     def _fake_port(self):
         return {'device': 'tapfake_dev',
-                'mac_address': 'ff:ff:ff:ff:ff:ff',
+                'mac_address': 'FF:FF:FF:FF:FF:FF',
                 'fixed_ips': [FAKE_IP['IPv4'],
                               FAKE_IP['IPv6']],
                 'security_groups': ['fake_sgid'],

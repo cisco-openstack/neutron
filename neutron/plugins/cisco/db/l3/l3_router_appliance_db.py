@@ -345,7 +345,7 @@ class L3RouterApplianceDBMixin(extraroute_db.ExtraRoute_dbonly_mixin):
             return
         LOG.info(_('Backlogging router %s for renewed scheduling attempt '
                    'later'), router_binding.router_id)
-        self._backlogged_routers.ad(router_binding.router_id)
+        self._backlogged_routers.add(router_binding.router_id)
 
     @lockutils.synchronized('routers', 'neutron-')
     def remove_router_from_backlog(self, router_id):

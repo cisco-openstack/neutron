@@ -710,18 +710,35 @@ class PhysicalL3RouterApplianceDBMixin(
             self.l3_cfg_rpc_notifier.routers_updated(context,
                                                      scheduled_routers)
 
-    def _get_router_info_for_agent(self, router):
+    def _get_phy_router_port_db(self, context, rid):
+        query = context.session.query(CiscoPhyRouterPortBinding)
+        query = query.filter(CiscoPhyRouterPortBinding.router_id == rid)
+        try:
+            phy_router_db = query.first()
+        except TypeError:
+            phy_router_db = None
+
+        return phy_router_db
+
+    def _get_router_info_for_agent(self, context, router):
         """Returns information about <router> needed by config agent.
 
             Convenience function that service plugins can use to populate
             their resources with information about the device hosting their
             logical resource.
         """
-        LOG.debug("_get_router_info_for_agent router:%s" % router)
+        rid = router['id']
         credentials = {'username': cfg.CONF.hosting_devices.csr1kv_username,
                        'password': cfg.CONF.hosting_devices.csr1kv_password}
         mgmt_ip = "1.1.1.1"
-        return {'id': router['id'],
+        phy_router_db = self._get_phy_router_port_db(context, rid)
+        if not phy_router_db:
+            host_id = "aaaaaaaa-1234-5678-9876-zzzzzzzzzzzz"
+        else:
+            host_id = phy_router_db['phy_router_id']
+        LOG.debug("_get_router_info_for_agent rid:%s host_id:%s" %
+                  (rid, host_id))
+        return {'id': host_id,
                 'credentials': credentials,
                 'management_ip_address': mgmt_ip,
                 'protocol_port': 443,
@@ -737,7 +754,8 @@ class PhysicalL3RouterApplianceDBMixin(
                                 'name': 'CSR1kv_router',
                                 'cfg_agent_driver': (cfg.CONF.hosting_devices
                                             .csr1kv_cfgagent_router_driver)}
-        router['hosting_device'] = self._get_router_info_for_agent(router)
+        router['hosting_device'] = self._get_router_info_for_agent(context,
+                                                                   router)
         return
 
     def _add_hosting_port_info(self, context, router, plugging_driver,

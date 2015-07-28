@@ -13,6 +13,7 @@
 #    under the License.
 #
 
+import contextlib
 import mock
 import neutron
 
@@ -111,6 +112,9 @@ class CSR1kvFirewallTestCaseBase(test_db_firewall.FirewallPluginDbTestCase,
         self._mock_io_file_ops()
 
     def restore_attribute_map(self):
+        # Remove the csrfirewallinsertion extension
+        firewall.RESOURCE_ATTRIBUTE_MAP['firewalls'].pop('port_id')
+        firewall.RESOURCE_ATTRIBUTE_MAP['firewalls'].pop('direction')
         # Restore the original RESOURCE_ATTRIBUTE_MAP
         attr.RESOURCE_ATTRIBUTE_MAP = self.saved_attr_map
 
@@ -197,6 +201,18 @@ class TestFirewallPluginBase(test_db_firewall.TestFirewallDBPlugin):
 class TestCiscoFirewallPlugin(CSR1kvFirewallTestCaseBase,
                               csrfw_db.CiscoFirewall_db_mixin):
 
+    def setUp(self):
+        super(TestCiscoFirewallPlugin, self).setUp()
+        self.fake_vendor_ext = {
+            'host_mngt_ip': '1.2.3.4',
+            'host_usr_nm': 'admin',
+            'host_usr_pw': 'cisco',
+            'if_list': {'port': {'id': 0, 'hosting_info': 'csr'},
+                        'direction': 'default'}
+        }
+        self.mock_get_hosting_info = mock.patch.object(
+            self.plugin, '_get_hosting_info').start()
+
     def test_create_csr_firewall(self):
         with self.router(tenant_id=self._tenant_id) as r:
             with self.subnet() as s:
@@ -224,6 +240,63 @@ class TestCiscoFirewallPlugin(CSR1kvFirewallTestCaseBase,
                 self.assertEqual(csrfw['direction'], 'inside')
 
     def test_update_csr_firewall(self):
+
+        with contextlib.nested(
+            self.router(tenant_id=self._tenant_id),
+            self.subnet(),
+        ) as (r, s):
+
+            body = self._router_interface_action(
+                'add',
+                r['router']['id'],
+                s['subnet']['id'],
+                None)
+            port_id = body['port_id']
+
+            self.fake_vendor_ext['if_list']['port']['id'] = port_id
+            self.fake_vendor_ext['if_list']['direction'] = 'inside'
+            self.mock_get_hosting_info.return_value = self.fake_vendor_ext
+
+            with self.firewall(port_id=body['port_id'],
+                 direction='both') as fw:
+                ctx = context.get_admin_context()
+                fw_id = fw['firewall']['id']
+                csrfw = self.lookup_firewall_csr_association(
+                    ctx, fw_id)
+                status_data = {'acl_id': 100}
+
+                res = self.callbacks.set_firewall_status(ctx, fw_id,
+                    const.ACTIVE, status_data)
+
+                # update direction on same port
+                data = {'firewall': {'name': 'firewall_2',
+                    'direction': 'both', 'port_id': port_id}}
+                req = self.new_update_request('firewalls', data,
+                    fw['firewall']['id'])
+                req.environ['neutron.context'] = context.Context(
+                    '', 'test-tenant')
+                res = self.deserialize(self.fmt,
+                req.get_response(self.ext_api))
+
+                csrfw = self.lookup_firewall_csr_association(ctx,
+                    fw['firewall']['id'])
+
+                self.assertEqual('firewall_2', res['firewall']['name'])
+                self.assertEqual(port_id, csrfw['port_id'])
+                self.assertEqual('both', csrfw['direction'])
+
+                # cant be in PENDING_XXX state for delete clean up
+                with ctx.session.begin(subtransactions=True):
+                    fw_db = self.plugin._get_firewall(ctx, fw_id)
+                    fw_db['status'] = const.ACTIVE
+                    ctx.session.flush()
+            self._router_interface_action(
+                'remove',
+                r['router']['id'],
+                s['subnet']['id'],
+                None)
+
+    def __test_update_csr_firewall(self):
         with self.router(tenant_id=self._tenant_id) as r:
             with self.subnet() as s:
                 body = self._router_interface_action('add',

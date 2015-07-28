@@ -509,6 +509,12 @@ class L3NATAgent(firewall_l3_agent.FWaaSL3AgentRpcCallback,
 
         self._check_config_params()
 
+        self._process_monitor = external_process.ProcessMonitor(
+                               config=self.conf,
+                               root_helper=self.root_helper,
+                               resource_type='router',
+                               exit_handler=self._exit_handler)
+
         try:
             self.driver = importutils.import_object(
                 self.conf.interface_driver,
@@ -581,6 +587,17 @@ class L3NATAgent(firewall_l3_agent.FWaaSL3AgentRpcCallback,
         self.fip_ns_subscribers.discard(router_id)
         return len(self.fip_ns_subscribers) == 0
 
+    def _exit_handler(self, uuid, service):
+        """This is an exit handler for the ProcessMonitor.
+        It will be called if the administrator configured the exit action on
+        check_child_processes_actions, and one of our external processes die
+        unexpectedly.
+        """
+        LOG.error(_LE("Exiting neutron-l3-agent because of service "
+                      "%(service)s process with uuid %(uuid)s malfunction"),
+                  {'service': service, 'uuid': uuid})
+        raise SystemExit(1)
+
     def _check_config_params(self):
         """Check items in configuration files.
 
@@ -643,6 +660,7 @@ class L3NATAgent(firewall_l3_agent.FWaaSL3AgentRpcCallback,
         one attempt will be made to delete them.
         """
         for ns in router_namespaces:
+            ra.disable_ipv6_ra(ns[len(NS_PREFIX):], self._process_monitor)
             try:
                 self._destroy_namespace(ns)
             except RuntimeError:
@@ -701,7 +719,7 @@ class L3NATAgent(firewall_l3_agent.FWaaSL3AgentRpcCallback,
 
     def _destroy_router_namespace(self, ns):
         router_id = ns[len(NS_PREFIX):]
-        ra.disable_ipv6_ra(router_id, ns, self.root_helper)
+        ra.disable_ipv6_ra(router_id, self._process_monitor)
         if self.conf.enable_metadata_proxy:
             self._destroy_metadata_proxy(router_id, ns)
         ns_ip = ip_lib.IPWrapper(self.root_helper, namespace=ns)
@@ -826,21 +844,14 @@ class L3NATAgent(firewall_l3_agent.FWaaSL3AgentRpcCallback,
 
         return callback
 
-    def _get_metadata_proxy_process_manager(self, router_id, ns_name):
-        return external_process.ProcessManager(
-            self.conf,
+    def _spawn_metadata_proxy(self, router_id, ns_name):
+        self._process_monitor.enable(
             router_id,
-            self.root_helper,
+            self._get_metadata_proxy_callback(router_id),
             ns_name)
 
-    def _spawn_metadata_proxy(self, router_id, ns_name):
-        callback = self._get_metadata_proxy_callback(router_id)
-        pm = self._get_metadata_proxy_process_manager(router_id, ns_name)
-        pm.enable(callback)
-
     def _destroy_metadata_proxy(self, router_id, ns_name):
-        pm = self._get_metadata_proxy_process_manager(router_id, ns_name)
-        pm.disable()
+        self._process_monitor.disable(router_id, ns_name)
 
     def _set_subnet_arp_info(self, ri, port):
         """Set ARP info retrieved from Plugin for existing ports."""
@@ -917,7 +928,7 @@ class L3NATAgent(firewall_l3_agent.FWaaSL3AgentRpcCallback,
                               ri.ns_name,
                               internal_ports,
                               self.get_internal_device_name,
-                              self.root_helper)
+                              self._process_monitor)
 
         existing_devices = self._get_existing_devices(ri)
         current_internal_devs = set([n for n in existing_devices

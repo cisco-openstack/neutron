@@ -229,3 +229,8 @@ class ProfileTenantBindingNotFound(exceptions.NotFound):
 class NoClusterFound(exceptions.NotFound):
     """No service cluster found to perform multi-segment bridging."""
     message = _("No service cluster found to perform multi-segment bridging.")
+
+
+class FullSyncInProgress(exceptions.NeutronException):
+    """Neutron is busy syncing with the VSM."""
+    message = _("Neutron-VSM sync is in progress. Please try again later.")

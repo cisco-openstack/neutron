@@ -190,8 +190,8 @@ class AgentMixin(object):
 
     def _add_keepalived_notifiers(self, ri):
         callback = self._get_metadata_proxy_callback(ri.router_id)
-        pm = self._get_metadata_proxy_process_manager(ri.router_id, ri.ns_name)
-        pid = pm.get_pid_file_name(ensure_pids_dir=True)
+        self._process_monitor.ensure_pids_dir(ri.router_id)
+        pid = self._process_monitor.get_pid_file_name(ri.router_id)
         ri.keepalived_manager.add_notifier(
             callback(pid), 'master', ri.ha_vr_id)
         for state in ('backup', 'fault'):

@@ -12,6 +12,7 @@
 #    License for the specific language governing permissions and limitations
 #    under the License.
 
+
 import mock
 import webob.exc
 
@@ -69,6 +70,12 @@ class FakeResponse(object):
 def _fake_setup_vsm(self):
     """Fake establish Communication with Cisco Nexus1000V VSM."""
     self.agent_vsm = True
+    self.full_sync = False
+    self.n1kvclient = n1kv_client.Client()
+    self.sync_resource = {"network_profiles": False,
+                          "networks": False,
+                          "subnets": False,
+                          "ports": False}
     self._populate_policy_profiles()
 
 
@@ -169,6 +176,15 @@ class N1kvPluginTestCase(test_plugin.NeutronDbPluginV2TestCase):
                                           net_p['id'], c_const.NETWORK)
         return net_p
 
+    def _get_vsm_patch(self):
+        """Return vsm if it exists, otherwise create and return fake_client."""
+        try:
+            return self.vsm_patch
+        except AttributeError:
+            self.vsm_patch = mock.patch(n1kv_client.__name__ + ".Client",
+                                        new=fake_client.TestClient)
+            return self.vsm_patch
+
     def setUp(self, ext_mgr=NetworkProfileTestExtensionManager()):
         """
         Setup method for n1kv plugin tests.
@@ -220,6 +236,9 @@ class N1kvPluginTestCase(test_plugin.NeutronDbPluginV2TestCase):
         mock.patch(cdb.__name__ + ".get_credential_name",
                    new=lambda self: {"user_name": "admin",
                                      "password": "admin_password"}).start()
+
+        # Start dummy vsm with default fake_client.TestClient
+        self._get_vsm_patch().start()
 
         n1kv_neutron_plugin.N1kvNeutronPluginV2._setup_vsm = _fake_setup_vsm
 
@@ -771,36 +790,6 @@ class TestN1kvPorts(test_plugin.TestPortsV2,
             # Port update should fail to update policy profile id.
             self.assertEqual(res.status_int, 400)
 
-    def test_create_first_port_invalid_parameters_fail(self):
-        """Test parameters for first port create sent to the VSM."""
-        profile_obj = self._make_test_policy_profile(name='test_profile')
-        with self.network() as network:
-            client_patch = mock.patch(n1kv_client.__name__ + ".Client",
-                                      new=fake_client.TestClientInvalidRequest)
-            client_patch.start()
-            data = {'port': {n1kv.PROFILE_ID: profile_obj.id,
-                             'tenant_id': self.tenant_id,
-                             'network_id': network['network']['id'],
-                             }}
-            port_req = self.new_create_request('ports', data)
-            res = port_req.get_response(self.api)
-            self.assertEqual(res.status_int, 500)
-            client_patch.stop()
-
-    def test_create_next_port_invalid_parameters_fail(self):
-        """Test parameters for subsequent port create sent to the VSM."""
-        with self.port() as port:
-            client_patch = mock.patch(n1kv_client.__name__ + ".Client",
-                                      new=fake_client.TestClientInvalidRequest)
-            client_patch.start()
-            data = {'port': {n1kv.PROFILE_ID: port['port']['n1kv:profile_id'],
-                             'tenant_id': port['port']['tenant_id'],
-                             'network_id': port['port']['network_id']}}
-            port_req = self.new_create_request('ports', data)
-            res = port_req.get_response(self.api)
-            self.assertEqual(res.status_int, 500)
-            client_patch.stop()
-
     def test_create_first_port_rollback_vmnetwork(self):
         """Test whether VMNetwork is cleaned up if port create fails on VSM."""
         db_session = db.get_session()
@@ -867,6 +856,67 @@ class TestN1kvPorts(test_plugin.TestPortsV2,
                               pt['network_id'])
 
 
+class TestN1kvWithInvalidRequest(N1kvPluginTestCase):
+    def setUp(self):
+        self.vsm_patch = mock.patch(n1kv_client.__name__ + ".Client",
+                                    new=fake_client.TestClientInvalidRequest)
+        super(TestN1kvWithInvalidRequest, self).setUp()
+
+    def test_create_first_port_invalid_parameters_fail(self):
+        """Test parameters for first port create sent to the VSM."""
+        profile_obj = self._make_test_policy_profile(name='test_profile')
+        with self.network() as network:
+            data = {'port': {n1kv.PROFILE_ID: profile_obj.id,
+                             'tenant_id': self.tenant_id,
+                             'network_id': network['network']['id'],
+                             }}
+            port_req = self.new_create_request('ports', data)
+            res = port_req.get_response(self.api)
+            self.assertEqual(500, res.status_int)
+
+    def test_create_next_port_invalid_parameters_fail(self):
+        """Test parameters for subsequent port create sent to the VSM."""
+        request_patch = mock.patch((n1kv_client.__name__ +
+                                    '.Client._do_request'),
+                                   new=lambda *args, **kwargs: True)
+        request_patch.start()
+        with self.port() as port:
+            request_patch.stop()
+            data = {'port': {n1kv.PROFILE_ID: port['port']['n1kv:profile_id'],
+                             'tenant_id': port['port']['tenant_id'],
+                             'network_id': port['port']['network_id']}}
+            port_req = self.new_create_request('ports', data)
+            res = port_req.get_response(self.api)
+            self.assertEqual(500, res.status_int)
+
+
+class TestN1kvFullSync(N1kvPluginTestCase):
+    def _prepare_net_data(self, net_profile_id):
+        return {'network': {'name': 'net1',
+                            n1kv.PROFILE_ID: net_profile_id,
+                            'tenant_id': self.tenant_id}}
+
+    def test_get_vsm_resource(self):
+        """Test _get_vsm_resource api."""
+        for resource in ('network_profiles', 'networks',
+                         'subnets', 'vmnetworks'):
+            plugin = manager.NeutronManager.get_plugin()
+            ret = plugin._get_vsm_resource(resource)
+            self.assertEqual(fake_client.total_count, len(ret))
+
+    def test_sync_networks_with_vsm(self):
+        """Test full sync networks with vsm."""
+        plugin = manager.NeutronManager.get_plugin()
+        profile_obj = self._make_test_profile(name='test_profile')
+        data = self._prepare_net_data(profile_obj.id)
+        network_req = self.new_create_request('networks', data)
+        network = self.deserialize(self.fmt,
+                                   network_req.get_response(self.api))
+        self.assertEqual(profile_obj.id,
+                         network['network'][n1kv.PROFILE_ID])
+        plugin._sync_networks_with_vsm(context.Context('', self.tenant_id))
+
+
 class TestN1kvPolicyProfiles(N1kvPluginTestCase):
     def setUp(self):
         """
@@ -928,17 +978,7 @@ class TestN1kvPolicyProfiles(N1kvPluginTestCase):
 
     def _init_get_policy_profiles(self):
         # Get the profiles
-        mock.patch(n1kv_client.__name__ + ".Client",
-                   new=fake_client.TestClient).start()
-        instance = n1kv_neutron_plugin.N1kvNeutronPluginV2()
-        instance._populate_policy_profiles()
-        db_session = db.get_session()
-        return [
-            n1kv_db_v2.get_policy_profile(
-                    db_session, '00000000-0000-0000-0000-000000000001'),
-            n1kv_db_v2.get_policy_profile(
-                    db_session, '00000000-0000-0000-0000-000000000002')
-        ]
+        return n1kv_db_v2.get_policy_profiles().all()
 
     def _test_get_policy_profiles(self, expected_profiles, admin):
         resource = 'policy_profiles'
@@ -953,11 +993,10 @@ class TestN1kvPolicyProfiles(N1kvPluginTestCase):
         res = self._list(resource, neutron_context=ctx)
         self.assertEqual(len(expected_profiles), len(res[resource]))
         profiles = sorted(res[resource])
+        expected_profiles_dict = dict([(profile.id, profile.name) for
+                                       profile in expected_profiles])
         for i in range(len(profiles)):
-            self.assertEqual(expected_profiles[i].id,
-                             profiles[i]['id'])
-            self.assertEqual(expected_profiles[i].name,
-                             profiles[i]['name'])
+            self.assertTrue(profiles[i]['id'] in expected_profiles_dict)
 
     def test_get_profiles_unrestricted(self):
         """

@@ -73,7 +73,8 @@ cisco_n1k_opts = [
     cfg.BoolOpt('restrict_network_profiles', default=False,
                help=_("Restrict tenants from accessing network profiles "
                       "belonging to some other tenant")),
-
+    cfg.BoolOpt('enable_sync_on_start', default=False,
+                help=_("Initiate full sync with VSM on neutron start.")),
 ]
 
 cfg.CONF.register_opts(cisco_opts, "CISCO")

@@ -133,6 +133,10 @@ class HelpersTest(testlib_api.SqlTestCase):
     def test_allocate_partial_segment_first_attempt_fails(self):
         expected = dict(physical_network=TENANT_NET)
         with mock.patch.object(query.Query, 'update', side_effect=[0, 1]):
+            self.assertRaises(
+                db.RetryRequest,
+                self.driver.allocate_partially_specified_segment,
+                self.session, **expected)
             observed = self.driver.allocate_partially_specified_segment(
                 self.session, **expected)
             self.check_raw_segment(expected, observed)

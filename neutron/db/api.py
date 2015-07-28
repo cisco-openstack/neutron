@@ -13,6 +13,7 @@
 #    License for the specific language governing permissions and limitations
 #    under the License.
 
+import functools
 import six
 import sys
 import time
@@ -52,6 +53,41 @@ def get_session(autocommit=True, expire_on_commit=False):
     facade = _create_facade_lazily()
     return facade.get_session(autocommit=autocommit,
                               expire_on_commit=expire_on_commit)
+
+
+class RetryRequest(Exception):
+    def __init__(self, inner_exc):
+        self.inner_exc = inner_exc
+
+
+def db_retry_on_request(f, max_retries=MAX_RETRIES):
+    """Decorator to retry a DB API call if inner code requests so.
+
+    This might be needed if inner code detects that it need to
+    restart whole transaction.
+    """
+    @functools.wraps(f)
+    def wrapper(*args, **kwargs):
+        for attempt in xrange(1, max_retries + 2):
+            try:
+                LOG.debug("Trying operation "
+                          "'%(func_name)s', attempt %(attempt)s",
+                          {'func_name': f.__name__,
+                           'attempt': attempt})
+                return f(*args, **kwargs)
+            except RetryRequest as e:
+                if attempt >= max_retries + 1:
+                    LOG.warn(_("Operation '%(func_name)s' has failed "
+                               "after %(attempts)s attempts"),
+                             {'func_name': f.__name__,
+                              'attempts': attempt})
+                    # preserve original stack trace
+                    # which is contained in 'e'
+                    six.reraise(type(e.inner_exc),
+                                e.inner_exc,
+                                sys.exc_info()[2])
+
+    return wrapper
 
 
 class wrap_db_retry(object):

@@ -113,6 +113,9 @@ class CiscoML2MechanismTestCase(test_db_plugin.NeutronDbPluginV2TestCase):
         if self._testMethodName in self._unsupported:
             self.skipTest("Unsupported test case")
 
+        cisco_config.cfg.CONF.set_override('api_workers', 0)
+        cisco_config.cfg.CONF.set_override('rpc_workers', 0)
+
         # Configure the ML2 mechanism drivers and network types
         ml2_opts = {
             'mechanism_drivers': ['cisco_nexus'],
@@ -1097,6 +1100,33 @@ class TestCiscoPortsV2(CiscoML2MechanismTestCase,
             with self._create_resources(cidr=CIDR_2):
                 assert(len(nexus_db_v2.get_nexusport_switch_bindings
                            (NEXUS_IP_ADDR)) == 1)
+
+    def test_nexus_ncclient_disconnect(self):
+        """Test handling of closing ncclient sessions.
+
+        When multi neutron-server processes are used verify that ncclient
+        close_session method is called.
+
+        """
+
+        # Mock to keep track of number of close_session calls.
+        ncclient_close = mock.patch.object(
+            nexus_network_driver.CiscoNexusDriver,
+            '_close_session').start()
+
+        # Verify that ncclient is not closed by default.
+        with self._create_resources():
+            assert not ncclient_close.called
+
+        # Patch to close ncclient session.
+        mock.patch.object(nexus_network_driver.CiscoNexusDriver,
+                          '_get_close_ssh_session',
+                          return_value=True).start()
+
+        # Verify that ncclient close is called twice. For create VLAN and
+        # trunk interface calls.
+        with self._create_resources():
+            self.assertEqual(ncclient_close.call_count, 2)
 
 
 class TestCiscoNetworksV2(CiscoML2MechanismTestCase,

@@ -29,6 +29,8 @@ _resource_metadata = {'port': ['id', 'macAddress', 'ipAddress', 'subnetId'],
                                  'dhcp', 'dnsServersList', 'networkAddress',
                                  'netSegmentName', 'id', 'tenantId']}
 
+total_count = 2
+
 
 class TestClient(n1kv_client.Client):
 
@@ -52,6 +54,14 @@ class TestClient(n1kv_client.Client):
             if 'virtual-port-profile' in action:
                 return _policy_profile_generator(
                     self._get_total_profiles())
+            if 'network-segment-pool' in action:
+                return _network_profile_generator(total_count)
+            if 'network-segment' in action:
+                return _network_generator(total_count)
+            if 'ip-pool-template' in action:
+                return _subnet_generator(total_count)
+            if 'vm-network' in action:
+                return _vmnetwork_generator(total_count)
             else:
                 raise c_exc.VSMError(reason='VSM:Internal Server Error')
 
@@ -91,14 +101,62 @@ def _validate_resource(action, body=None):
         return
 
 
+def _network_profile_generator(total_count):
+    """Generate network profile response and return a dictionary."""
+    network_profiles = {}
+    for i in range(1, total_count + 1):
+        name = 'np-%s' % i
+        pid = '%s' % i
+        network_profiles[name] = {'properties': {'name': name, 'id': pid}}
+    return network_profiles
+
+
+def _network_generator(total_count):
+    """Generate network response and return a dictionary."""
+    networks = {}
+    for i in range(1, total_count + 1):
+        name = 'net%s' % i
+        nid = i
+        networks[name] = {'properties': {'name': name, 'id': nid,
+                                         'segmentType': 'vlan'}}
+    return networks
+
+
+def _subnet_generator(total_count):
+    """Generate subnet response and return a dictionary."""
+    subnets = {}
+    for i in range(1, total_count + 1):
+        name = 'subnet-%s' % i
+        sid = '%s' % i
+        subnets[name] = {'properties': {'name': name, 'id': sid}}
+    return subnets
+
+
+def _vmnetwork_generator(total_count):
+    """Generate vmnetwork response and return a dictionary."""
+    vmnetworks = {}
+    for i in range(1, total_count + 1):
+        name = 'vmnetwork-%s' % i
+        vid = '%s' % i
+        portId = '2fc54102-%s' % i
+        vmnetworks[name] = {'properties': {'name': name, 'id': vid,
+                                           'portId': [portId]}}
+    return vmnetworks
+
+
 def _policy_profile_generator(total_profiles):
-    """
-    Generate policy profile response and return a dictionary.
+    """Generate policy profile response and return a dictionary.
 
     :param total_profiles: integer representing total number of profiles to
                            return
     """
-    profiles = {}
+    # default policy profiles
+    profiles = {"icehouse-pp": {"properties": {"name": "icehouse-pp",
+                                               "id": "some-uuid-1"}},
+                "havana_pp": {"properties": {"name": "havana_pp",
+                                             "id": "some-uuid-2"}},
+                "dhcp_pp": {"properties": {"name": "dhcp_pp",
+                                           "id": "some-uuid-3"}}}
     for num in range(1, total_profiles + 1):
         name = "pp-%s" % num
         profile_id = "00000000-0000-0000-0000-00000000000%s" % num

@@ -6,7 +6,7 @@ python:
 # whitelist branches
 branches:
   only:
-    - staging/junoplus
+    - staging/juno-integration
 
 # command to install dependencies, e.g. pip install -r
 # Install tox for testing neutron builds.

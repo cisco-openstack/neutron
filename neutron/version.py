@@ -12,6 +12,16 @@
 #    License for the specific language governing permissions and limitations
 #    under the License.
 
-import pbr.version
 
-version_info = pbr.version.VersionInfo('neutron')
+class VersionInfo(object):
+    release = "RPMRELEASE"
+    version = "RPMVERSION"
+
+    def version_string(self):
+        return self.version
+
+    def release_string(self):
+        return self.release
+
+
+version_info = VersionInfo()

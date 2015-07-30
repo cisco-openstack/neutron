@@ -641,8 +641,9 @@ class PhysicalL3RouterApplianceDBMixin(
                 try:
                     port_binding_db, phy_router_db = phy_port_qry.first()
                 except TypeError:
-                    port_binding_db = None
-                    phy_router_db = None
+                    LOG.debug("_get_sync_interfaces: Unable to get phy_port")
+                    port_binding_db = {}
+                    phy_router_db = {}
 
                 ha_intf['port_binding_db'] = port_binding_db
                 ha_intf['phy_router_db'] = phy_router_db
@@ -716,7 +717,8 @@ class PhysicalL3RouterApplianceDBMixin(
         try:
             phy_router_db = query.first()
         except TypeError:
-            phy_router_db = None
+            LOG.debug("_get_phy_router_port_db: Unable to get phy_router")
+            phy_router_db = {}
 
         return phy_router_db
 

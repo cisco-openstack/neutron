@@ -123,8 +123,11 @@ class ConfigSyncer(object):
         #TODO(cisco): could combine segment_nat_dict and interface_segment_dict
         #      into a single "segment_dict"
 
-        for router in routers:
+        if routers is None:
+            LOG.debug("process_routers_data: no routers")
+            return router_id_dict, interface_segment_dict, segment_nat_dict
 
+        for router in routers:
             # initialize router dict keyed by first 6 characters of router_id
             router_id = router['id'][0:6]
             router_id_dict[router_id] = router

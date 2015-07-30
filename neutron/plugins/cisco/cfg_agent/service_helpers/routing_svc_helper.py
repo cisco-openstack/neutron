@@ -287,6 +287,7 @@ class RoutingServiceHelper(object):
         except n_rpc.RPCException:
             LOG.exception(_("RPC Error in fetching routers from plugin"))
             self.fullsync = True
+            return []
 
     @staticmethod
     def _get_router_ids_from_removed_devices_info(removed_devices_info):

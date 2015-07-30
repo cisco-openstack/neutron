@@ -141,7 +141,7 @@ class ASR1kRoutingDriver(csr1kv_driver.CSR1kvRoutingDriver):
         self.target_asr = target_asr
         self._err_listener = None
         self._fullsync = False
-        self._existing_cfg_dict = None
+        self._existing_cfg_dict = {}
         return
 
     def prepare_fullsync(self, existing_cfg_dict):

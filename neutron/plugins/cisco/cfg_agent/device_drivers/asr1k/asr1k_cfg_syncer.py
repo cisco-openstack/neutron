@@ -123,7 +123,7 @@ class ConfigSyncer(object):
         #TODO(cisco): could combine segment_nat_dict and interface_segment_dict
         #      into a single "segment_dict"
 
-        if routers is None:
+        if not routers:
             LOG.debug("process_routers_data: no routers")
             return router_id_dict, interface_segment_dict, segment_nat_dict
 
@@ -201,7 +201,7 @@ class ConfigSyncer(object):
                 dev_id = intf['device_id'][0:6]
                 ip_addr = intf['fixed_ips'][0]['ip_address']
                 if 'phy_router_db' in intf.keys():
-                    phy_router_name = intf['phy_router_db']['name']
+                    phy_router_name = intf['phy_router_db'].get('name')
                     LOG.debug("    INTF: %s, %s, %s, %s" %
                              (ip_addr, dev_id, dev_owner, phy_router_name))
                 else:
@@ -549,6 +549,10 @@ class ConfigSyncer(object):
                 delete_nat_list.append(nat_rule.text)
                 continue
 
+            if "_interfaces" not in router:
+                LOG.info(_("router has not interfaces"))
+                continue
+
             # Check that router has internal network interface on segment_id
             intf_match_found = False
             for intf in router['_interfaces']:
@@ -619,6 +623,10 @@ class ConfigSyncer(object):
                 LOG.info(_("outbound external interface segment_id is wrong,"
                          " deleting rule"))
                 #delete_nat_list.append(nat_rule.text)
+                continue
+
+            if "_interfaces" not in router:
+                LOG.info(_("router has not interfaces"))
                 continue
 
             # Check that router has internal network interface on segment_id
@@ -723,8 +731,8 @@ class ConfigSyncer(object):
 
         for target_intf in intf_list:
             if target_intf['device_owner'] == target_type:
-                asr_name = target_intf['phy_router_db']['name']
-                if asr_name == self.target_asr_name:
+                asr = target_intf['phy_router_db'].get('name')
+                if (asr is not None) and (asr == self.target_asr_name):
                     target_ip = target_intf['fixed_ips'][0]['ip_address']
                     t_net = netaddr.IPNetwork(target_intf['subnet']['cidr'])
                     LOG.debug("target ip,net: %s,%s, actual ip,net %s,%s" %

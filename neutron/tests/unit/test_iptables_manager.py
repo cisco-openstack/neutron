@@ -124,6 +124,7 @@ class IptablesCommentsTestCase(base.BaseTestCase):
                            % IPTABLES_ARG)
 
         raw_dump = _generate_raw_dump(IPTABLES_ARG)
+        mangle_dump = _generate_mangle_dump(IPTABLES_ARG)
 
         expected_calls_and_values = [
             (mock.call(['iptables-save', '-c'],
@@ -131,7 +132,8 @@ class IptablesCommentsTestCase(base.BaseTestCase):
              ''),
             (mock.call(['iptables-restore', '-c'],
                        process_input=(
-                           raw_dump + COMMENTED_NAT_DUMP + filter_dump_mod),
+                           raw_dump + COMMENTED_NAT_DUMP
+                           + mangle_dump + filter_dump_mod),
                        root_helper=self.root_helper),
              None),
             (mock.call(['iptables-save', '-c'],
@@ -139,7 +141,8 @@ class IptablesCommentsTestCase(base.BaseTestCase):
              ''),
             (mock.call(['iptables-restore', '-c'],
                        process_input=(
-                           raw_dump + COMMENTED_NAT_DUMP + FILTER_DUMP),
+                           raw_dump + COMMENTED_NAT_DUMP
+                           + mangle_dump + FILTER_DUMP),
                        root_helper=self.root_helper
                        ),
              None),

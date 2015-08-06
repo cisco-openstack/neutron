@@ -183,6 +183,9 @@ class ASR1kRoutingDriver(csr1kv_driver.CSR1kvRoutingDriver):
             LOG.info(_("ignoring non-HSRP interface"))
             return False
 
+        if not port['phy_router_db']:
+            return False
+
         asr_ent = self._get_asr_ent_from_port(port)
         if asr_ent['name'] != self.target_asr['name']:
             LOG.info(_("ignoring interface for non-target ASR"))

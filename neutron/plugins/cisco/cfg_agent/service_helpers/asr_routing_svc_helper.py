@@ -152,7 +152,7 @@ class PhyRouterContext(routing_svc_helper.RoutingServiceHelper):
         self.fullsync = True
 
     def delete_invalid_cfg(self, router_db_info):
-        if router_db_info is None:
+        if not router_db_info:
             router_db_info = self._fetch_router_info(all_routers=True)
         driver = self._drivermgr.get_driver(None)
         existing_cfg_dict = driver.delete_invalid_cfg(router_db_info)

@@ -19,6 +19,7 @@
 """Utilities and helper functions."""
 
 import datetime
+import errno
 import functools
 import hashlib
 import logging as std_logging
@@ -172,6 +173,16 @@ def find_config_file(options, config_file):
             return cfg_file
 
 
+def ensure_dir(dir_path):
+    """Ensure a directory with 755 permissions mode."""
+    try:
+        os.makedirs(dir_path, 0o755)
+    except OSError as e:
+        # If the directory already existed, don't raise the error.
+        if e.errno != errno.EEXIST:
+            raise
+
+
 def _subprocess_setup():
     # Python installs a SIGPIPE handler by default. This is usually not what
     # non-Python subprocesses expect.
@@ -220,6 +231,10 @@ def parse_mappings(mapping_list, unique_values=True):
 
 def get_hostname():
     return socket.gethostname()
+
+
+def get_first_host_ip(net, ip_version):
+    return str(netaddr.IPAddress(net.first + 1, ip_version))
 
 
 def compare_elements(a, b):

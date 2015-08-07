@@ -36,7 +36,7 @@ from neutron.common import exceptions
 from neutron.common import ipv6_utils
 from neutron.common import utils as commonutils
 from neutron.extensions import extra_dhcp_opt as edo_ext
-from neutron.i18n import _LI, _LW
+from neutron.i18n import _LI, _LW, _LE
 
 LOG = logging.getLogger(__name__)
 
@@ -174,7 +174,7 @@ class DhcpLocalProcess(DhcpBase):
                                                version, plugin)
         self.confs_dir = self.get_confs_dir(conf)
         self.network_conf_dir = os.path.join(self.confs_dir, network.id)
-        utils.ensure_dir(self.network_conf_dir)
+        commonutils.ensure_dir(self.network_conf_dir)
 
     @staticmethod
     def get_confs_dir(conf):
@@ -199,7 +199,7 @@ class DhcpLocalProcess(DhcpBase):
         if self.active:
             self.restart()
         elif self._enable_dhcp():
-            utils.ensure_dir(self.network_conf_dir)
+            commonutils.ensure_dir(self.network_conf_dir)
             interface_name = self.device_manager.setup(self.network)
             self.interface_name = interface_name
             self.spawn_process()
@@ -378,6 +378,20 @@ class Dnsmasq(DhcpLocalProcess):
 
         if self.conf.dhcp_broadcast_reply:
             cmd.append('--dhcp-broadcast')
+
+        if self.conf.dnsmasq_base_log_dir:
+            try:
+                if not os.path.exists(self.conf.dnsmasq_base_log_dir):
+                    os.makedirs(self.conf.dnsmasq_base_log_dir)
+                log_filename = os.path.join(
+                    self.conf.dnsmasq_base_log_dir,
+                    self.network.id, 'dhcp_dns_log')
+                cmd.append('--log-queries')
+                cmd.append('--log-dhcp')
+                cmd.append('--log-facility=%s' % log_filename)
+            except OSError:
+                LOG.error(_LE('Error while create dnsmasq base log dir: %s'),
+                    self.conf.dnsmasq_base_log_dir)
 
         return cmd
 
@@ -657,13 +671,22 @@ class Dnsmasq(DhcpLocalProcess):
         old_leases = self._read_hosts_file_leases(filename)
 
         new_leases = set()
+        dhcp_port_exists = False
+        dhcp_port_on_this_host = self.device_manager.get_device_id(
+            self.network)
         for port in self.network.ports:
             client_id = self._get_client_id(port)
             for alloc in port.fixed_ips:
                 new_leases.add((alloc.ip_address, port.mac_address, client_id))
+            if port.device_id == dhcp_port_on_this_host:
+                dhcp_port_exists = True
 
         for ip, mac, client_id in old_leases - new_leases:
             self._release_lease(mac, ip, client_id)
+
+        if not dhcp_port_exists:
+            self.device_manager.driver.unplug(
+                self.interface_name, namespace=self.network.namespace)
 
     def _output_addn_hosts_file(self):
         """Writes a dnsmasq compatible additional hosts file.
@@ -1047,9 +1070,18 @@ class DeviceManager(object):
 
         return dhcp_port
 
+    def _update_dhcp_port(self, network, port):
+        for index in range(len(network.ports)):
+            if network.ports[index].id == port.id:
+                network.ports[index] = port
+                break
+        else:
+            network.ports.append(port)
+
     def setup(self, network):
         """Create and initialize a device for network's DHCP on this host."""
         port = self.setup_dhcp_port(network)
+        self._update_dhcp_port(network, port)
         interface_name = self.get_interface_name(network, port)
 
         if ip_lib.ensure_device_is_ready(interface_name,

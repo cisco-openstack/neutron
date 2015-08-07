@@ -45,6 +45,9 @@ DEVICE_OWNER_LOADBALANCERV2 = "neutron:LOADBALANCERV2"
 # DEVICE_OWNER_ROUTER_HA_INTF is a special case and so is not included.
 ROUTER_INTERFACE_OWNERS = (DEVICE_OWNER_ROUTER_INTF,
                            DEVICE_OWNER_DVR_INTERFACE)
+ROUTER_INTERFACE_OWNERS_SNAT = (DEVICE_OWNER_ROUTER_INTF,
+                                DEVICE_OWNER_DVR_INTERFACE,
+                                DEVICE_OWNER_ROUTER_SNAT)
 L3_AGENT_MODE_DVR = 'dvr'
 L3_AGENT_MODE_DVR_SNAT = 'dvr_snat'
 L3_AGENT_MODE_LEGACY = 'legacy'
@@ -64,6 +67,8 @@ HA_NETWORK_NAME = 'HA network tenant %s'
 HA_SUBNET_NAME = 'HA subnet tenant %s'
 HA_PORT_NAME = 'HA port tenant %s'
 MINIMUM_AGENTS_FOR_HA = 2
+HA_ROUTER_STATE_ACTIVE = 'active'
+HA_ROUTER_STATE_STANDBY = 'standby'
 
 IPv4 = 'IPv4'
 IPv6 = 'IPv6'
@@ -138,6 +143,9 @@ IPV6_LLA_PREFIX = 'fe80::/64'
 # indicate that IPv6 Prefix Delegation should be used to allocate subnet CIDRs
 IPV6_PD_POOL_ID = 'prefix_delegation'
 
+# Special provisional prefix for IPv6 Prefix Delegation
+PROVISIONAL_IPV6_PD_PREFIX = '::/64'
+
 # Linux interface max length
 DEVICE_NAME_MAX_LEN = 15
 
@@ -178,3 +186,8 @@ RPC_NAMESPACE_STATE = None
 
 # Default network MTU value when not configured
 DEFAULT_NETWORK_MTU = 0
+
+ROUTER_MARK_MASK = "0xffff"
+
+# Time format
+ISO8601_TIME_FORMAT = '%Y-%m-%dT%H:%M:%S.%f'

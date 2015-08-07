@@ -29,6 +29,7 @@ from neutron.db import l3_dvr_db
 from neutron.db import model_base
 from neutron.db import models_v2
 from neutron.extensions import l3_ext_ha_mode as l3_ha
+from neutron.extensions import portbindings
 from neutron.i18n import _LI
 
 VR_ID_RANGE = set(range(1, 255))
@@ -80,9 +81,11 @@ class L3HARouterAgentPortBinding(model_base.BASEV2):
                                           ondelete='CASCADE'))
     agent = orm.relationship(agents_db.Agent)
 
-    state = sa.Column(sa.Enum('active', 'standby', name='l3_ha_states'),
-                      default='standby',
-                      server_default='standby')
+    state = sa.Column(sa.Enum(constants.HA_ROUTER_STATE_ACTIVE,
+                              constants.HA_ROUTER_STATE_STANDBY,
+                              name='l3_ha_states'),
+                      default=constants.HA_ROUTER_STATE_STANDBY,
+                      server_default=constants.HA_ROUTER_STATE_STANDBY)
 
 
 class L3HARouterNetwork(model_base.BASEV2):
@@ -336,6 +339,15 @@ class L3_HA_NAT_db_mixin(l3_dvr_db.L3_NAT_with_dvr_db_mixin):
             self._core_plugin.delete_port(admin_ctx, port['id'],
                                           l3_port_check=False)
 
+    def delete_ha_interfaces_on_host(self, context, router_id, host):
+        admin_ctx = context.elevated()
+        port_ids = (binding.port_id for binding
+                    in self.get_ha_router_port_bindings(admin_ctx,
+                                                        [router_id], host))
+        for port_id in port_ids:
+            self._core_plugin.delete_port(admin_ctx, port_id,
+                                          l3_port_check=False)
+
     def _notify_ha_interfaces_updated(self, context, router_id):
         self.l3_rpc_notifier.routers_updated(
             context, [router_id], shuffle_agents=True)
@@ -443,6 +455,20 @@ class L3_HA_NAT_db_mixin(l3_dvr_db.L3_NAT_with_dvr_db_mixin):
         bindings = self.get_ha_router_port_bindings(context, [router_id])
         return [(binding.agent, binding.state) for binding in bindings]
 
+    def get_active_host_for_ha_router(self, context, router_id):
+        bindings = self.get_l3_bindings_hosting_router_with_ha_states(
+            context, router_id)
+        # TODO(amuller): In case we have two or more actives, this method
+        # needs to return the last agent to become active. This requires
+        # timestamps for state changes. Otherwise, if a host goes down
+        # and another takes over, we'll have two actives. In this case,
+        # if an interface is added to a router, its binding might be wrong
+        # and l2pop would not work correctly.
+        return next(
+            (agent.host for agent, state in bindings
+             if state == constants.HA_ROUTER_STATE_ACTIVE),
+            None)
+
     def _process_sync_ha_data(self, context, routers, host):
         routers_dict = dict((router['id'], router) for router in routers)
 
@@ -461,7 +487,7 @@ class L3_HA_NAT_db_mixin(l3_dvr_db.L3_NAT_with_dvr_db_mixin):
             if interface:
                 self._populate_subnets_for_ports(context, [interface])
 
-        return routers_dict.values()
+        return list(routers_dict.values())
 
     def get_ha_sync_data_for_host(self, context, host=None, router_ids=None,
                                   active=None):
@@ -494,3 +520,22 @@ class L3_HA_NAT_db_mixin(l3_dvr_db.L3_NAT_with_dvr_db_mixin):
         bindings = self.get_ha_router_port_bindings(
             context, router_ids=states.keys(), host=host)
         self._set_router_states(context, bindings, states)
+        self._update_router_port_bindings(context, states, host)
+
+    def _update_router_port_bindings(self, context, states, host):
+        admin_ctx = context.elevated()
+        device_filter = {'device_id': states.keys(),
+                         'device_owner':
+                         [constants.DEVICE_OWNER_ROUTER_INTF]}
+        ports = self._core_plugin.get_ports(admin_ctx, filters=device_filter)
+        active_ports = (port for port in ports
+            if states[port['device_id']] == constants.HA_ROUTER_STATE_ACTIVE)
+
+        for port in active_ports:
+            port[portbindings.HOST_ID] = host
+            try:
+                self._core_plugin.update_port(admin_ctx, port['id'],
+                                              {attributes.PORT: port})
+            except (orm.exc.StaleDataError, orm.exc.ObjectDeletedError):
+                # Take concurrently deleted interfaces in to account
+                pass

@@ -194,7 +194,7 @@ class SecurityGroupServerRpcMixin(sg_db.SecurityGroupDbMixin):
 
             for key in ('protocol', 'port_range_min', 'port_range_max',
                         'remote_ip_prefix', 'remote_group_id'):
-                if rule_in_db.get(key):
+                if rule_in_db.get(key) is not None:
                     if key == 'remote_ip_prefix':
                         direction_ip_prefix = DIRECTION_IP_PREFIX[direction]
                         rule_dict[direction_ip_prefix] = rule_in_db[key]
@@ -205,6 +205,11 @@ class SecurityGroupServerRpcMixin(sg_db.SecurityGroupDbMixin):
             if rule_dict not in sg_info['security_groups'][security_group_id]:
                 sg_info['security_groups'][security_group_id].append(
                     rule_dict)
+        # Update the security groups info if they don't have any rules
+        sg_ids = self._select_sg_ids_for_ports(context, ports)
+        for (sg_id, ) in sg_ids:
+            if sg_id not in sg_info['security_groups']:
+                sg_info['security_groups'][sg_id] = []
 
         sg_info['sg_member_ips'] = remote_security_group_info
         # the provider rules do not belong to any security group, so these
@@ -222,6 +227,15 @@ class SecurityGroupServerRpcMixin(sg_db.SecurityGroupDbMixin):
                 if ethertype in sg_info['sg_member_ips'][sg_id]:
                     sg_info['sg_member_ips'][sg_id][ethertype].add(ip)
         return sg_info
+
+    def _select_sg_ids_for_ports(self, context, ports):
+        if not ports:
+            return []
+        sg_binding_port = sg_db.SecurityGroupPortBinding.port_id
+        sg_binding_sgid = sg_db.SecurityGroupPortBinding.security_group_id
+        query = context.session.query(sg_binding_sgid)
+        query = query.filter(sg_binding_port.in_(ports.keys()))
+        return query.all()
 
     def _select_rules_for_ports(self, context, ports):
         if not ports:
@@ -440,7 +454,7 @@ class SecurityGroupServerRpcMixin(sg_db.SecurityGroupDbMixin):
             }
             for key in ('protocol', 'port_range_min', 'port_range_max',
                         'remote_ip_prefix', 'remote_group_id'):
-                if rule_in_db.get(key):
+                if rule_in_db.get(key) is not None:
                     if key == 'remote_ip_prefix':
                         direction_ip_prefix = DIRECTION_IP_PREFIX[direction]
                         rule_dict[direction_ip_prefix] = rule_in_db[key]

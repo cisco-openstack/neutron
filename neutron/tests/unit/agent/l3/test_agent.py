@@ -79,8 +79,7 @@ class BasicRouterOperationsFramework(base.BaseTestCase):
             'neutron.agent.linux.ip_lib.device_exists')
         self.device_exists = self.device_exists_p.start()
 
-        self.ensure_dir = mock.patch('neutron.agent.linux.utils'
-                                     '.ensure_dir').start()
+        self.ensure_dir = mock.patch('neutron.common.utils.ensure_dir').start()
 
         mock.patch('neutron.agent.linux.keepalived.KeepalivedManager'
                    '.get_full_config_file_path').start()
@@ -687,15 +686,17 @@ class TestBasicRouterOperations(BasicRouterOperationsFramework):
             '! -i %s ! -o %s -m conntrack ! --ctstate DNAT -j ACCEPT' %
             (interface_name, interface_name),
             '-o %s -j SNAT --to-source %s' % (interface_name, source_nat_ip),
-            '-m mark ! --mark 0x2 -m conntrack --ctstate DNAT '
-            '-j SNAT --to-source %s' % source_nat_ip]
+            '-m mark ! --mark 0x2/%s -m conntrack --ctstate DNAT '
+            '-j SNAT --to-source %s' %
+            (l3_constants.ROUTER_MARK_MASK, source_nat_ip)]
         for r in nat_rules:
             if negate:
                 self.assertNotIn(r.rule, expected_rules)
             else:
                 self.assertIn(r.rule, expected_rules)
         expected_rules = [
-            '-i %s -j MARK --set-xmark 0x2/0xffffffff' % interface_name]
+            '-i %s -j MARK --set-xmark 0x2/%s' %
+            (interface_name, l3_constants.ROUTER_MARK_MASK)]
         for r in mangle_rules:
             if negate:
                 self.assertNotIn(r.rule, expected_rules)
@@ -1489,10 +1490,11 @@ class TestBasicRouterOperations(BasicRouterOperationsFramework):
             {},
             **self.ri_kwargs)
         ri.iptables_manager = mock.Mock()
+        ri._is_this_snat_host = mock.Mock(return_value=True)
+        ri.get_ex_gw_port = mock.Mock(return_value=mock.ANY)
 
-        with mock.patch.object(dvr_router.LOG,
-                               'debug') as log_debug:
-            ri._handle_router_snat_rules(mock.ANY, mock.ANY, mock.ANY)
+        with mock.patch.object(dvr_router.LOG, 'debug') as log_debug:
+            ri._handle_router_snat_rules(mock.ANY, mock.ANY)
         self.assertIsNone(ri.snat_iptables_manager)
         self.assertFalse(ri.iptables_manager.called)
         self.assertTrue(log_debug.called)
@@ -1502,7 +1504,7 @@ class TestBasicRouterOperations(BasicRouterOperationsFramework):
         ri.iptables_manager = mock.MagicMock()
         port = {'fixed_ips': [{'ip_address': '192.168.1.4'}]}
 
-        ri._handle_router_snat_rules(port, "iface", "add_rules")
+        ri._handle_router_snat_rules(port, "iface")
 
         nat = ri.iptables_manager.ipv4['nat']
         nat.empty_chain.assert_any_call('snat')
@@ -1518,19 +1520,20 @@ class TestBasicRouterOperations(BasicRouterOperationsFramework):
         ri = l3router.RouterInfo(_uuid(), {}, **self.ri_kwargs)
         ex_gw_port = {'fixed_ips': [{'ip_address': '192.168.1.4'}]}
         ri.router = {'distributed': False}
-        ri._handle_router_snat_rules(ex_gw_port, "iface", "add_rules")
+        ri._handle_router_snat_rules(ex_gw_port, "iface")
 
-        nat_rules = map(str, ri.iptables_manager.ipv4['nat'].rules)
+        nat_rules = list(map(str, ri.iptables_manager.ipv4['nat'].rules))
         wrap_name = ri.iptables_manager.wrap_name
 
         jump_float_rule = "-A %s-snat -j %s-float-snat" % (wrap_name,
                                                            wrap_name)
         snat_rule1 = ("-A %s-snat -o iface -j SNAT --to-source %s") % (
             wrap_name, ex_gw_port['fixed_ips'][0]['ip_address'])
-        snat_rule2 = ("-A %s-snat -m mark ! --mark 0x2 "
+        snat_rule2 = ("-A %s-snat -m mark ! --mark 0x2/%s "
                       "-m conntrack --ctstate DNAT "
                       "-j SNAT --to-source %s") % (
-            wrap_name, ex_gw_port['fixed_ips'][0]['ip_address'])
+            wrap_name, l3_constants.ROUTER_MARK_MASK,
+            ex_gw_port['fixed_ips'][0]['ip_address'])
 
         self.assertIn(jump_float_rule, nat_rules)
 
@@ -1539,9 +1542,10 @@ class TestBasicRouterOperations(BasicRouterOperationsFramework):
         self.assertThat(nat_rules.index(jump_float_rule),
                         matchers.LessThan(nat_rules.index(snat_rule1)))
 
-        mangle_rules = map(str, ri.iptables_manager.ipv4['mangle'].rules)
+        mangle_rules = list(map(str, ri.iptables_manager.ipv4['mangle'].rules))
         mangle_rule = ("-A %s-mark -i iface "
-                       "-j MARK --set-xmark 0x2/0xffffffff") % wrap_name
+                       "-j MARK --set-xmark 0x2/%s" %
+                       (wrap_name, l3_constants.ROUTER_MARK_MASK))
         self.assertIn(mangle_rule, mangle_rules)
 
     def test_process_router_delete_stale_internal_devices(self):

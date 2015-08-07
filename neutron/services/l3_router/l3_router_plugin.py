@@ -14,12 +14,12 @@
 #    under the License.
 
 from oslo_config import cfg
+from oslo_log import helpers as log_helpers
 from oslo_utils import importutils
 
 from neutron.api.rpc.agentnotifiers import l3_rpc_agent_api
 from neutron.api.rpc.handlers import l3_rpc
 from neutron.common import constants as n_const
-from neutron.common import log as neutron_log
 from neutron.common import rpc as n_rpc
 from neutron.common import topics
 from neutron.db import common_db_mixin
@@ -30,6 +30,7 @@ from neutron.db import l3_gwmode_db
 from neutron.db import l3_hamode_db
 from neutron.db import l3_hascheduler_db
 from neutron.plugins.common import constants
+from neutron.quota import resource_registry
 
 
 class L3RouterPlugin(common_db_mixin.CommonDbMixin,
@@ -52,6 +53,8 @@ class L3RouterPlugin(common_db_mixin.CommonDbMixin,
                                    "extraroute", "l3_agent_scheduler",
                                    "l3-ha"]
 
+    @resource_registry.tracked_resources(router=l3_db.Router,
+                                         floatingip=l3_db.FloatingIP)
     def __init__(self):
         self.setup_rpc()
         self.router_scheduler = importutils.import_object(
@@ -62,7 +65,7 @@ class L3RouterPlugin(common_db_mixin.CommonDbMixin,
             l3_dvrscheduler_db.subscribe()
         l3_db.subscribe()
 
-    @neutron_log.log
+    @log_helpers.log_method_call
     def setup_rpc(self):
         # RPC support
         self.topic = topics.L3PLUGIN

@@ -182,7 +182,8 @@ class SGServerRpcCallBackTestCase(test_sg.SecurityGroupDBTestCase):
             '192.168.1.3')
         self.assertFalse(self.notifier.security_groups_provider_updated.called)
 
-    def test_security_group_rules_for_devices_ipv4_ingress(self):
+    def _test_sg_rules_for_devices_ipv4_ingress_port_range(
+            self, min_port, max_port):
         fake_prefix = FAKE_PREFIX[const.IPv4]
         with self.network() as n,\
                 self.subnet(n),\
@@ -190,8 +191,8 @@ class SGServerRpcCallBackTestCase(test_sg.SecurityGroupDBTestCase):
             sg1_id = sg1['security_group']['id']
             rule1 = self._build_security_group_rule(
                 sg1_id,
-                'ingress', const.PROTO_NAME_TCP, '22',
-                '22')
+                'ingress', const.PROTO_NAME_TCP, str(min_port),
+                str(max_port))
             rule2 = self._build_security_group_rule(
                 sg1_id,
                 'ingress', const.PROTO_NAME_TCP, '23',
@@ -221,9 +222,9 @@ class SGServerRpcCallBackTestCase(test_sg.SecurityGroupDBTestCase):
                         {'direction': 'ingress',
                          'protocol': const.PROTO_NAME_TCP,
                          'ethertype': const.IPv4,
-                         'port_range_max': 22,
+                         'port_range_max': max_port,
                          'security_group_id': sg1_id,
-                         'port_range_min': 22},
+                         'port_range_min': min_port},
                         {'direction': 'ingress',
                          'protocol': const.PROTO_NAME_TCP,
                          'ethertype': const.IPv4,
@@ -234,6 +235,34 @@ class SGServerRpcCallBackTestCase(test_sg.SecurityGroupDBTestCase):
             self.assertEqual(port_rpc['security_group_rules'],
                              expected)
             self._delete('ports', port_id1)
+
+    def test_sg_rules_for_devices_ipv4_ingress_port_range_min_port_0(self):
+        self._test_sg_rules_for_devices_ipv4_ingress_port_range(0, 10)
+
+    def test_sg_rules_for_devices_ipv4_ingress_port_range_min_port_1(self):
+        self._test_sg_rules_for_devices_ipv4_ingress_port_range(1, 10)
+
+    def test_security_group_info_for_ports_with_no_rules(self):
+        with self.network() as n,\
+                self.subnet(n),\
+                self.security_group() as sg:
+            sg_id = sg['security_group']['id']
+            self._delete_default_security_group_egress_rules(sg_id)
+
+            res = self._create_port(
+                self.fmt, n['network']['id'],
+                security_groups=[sg_id])
+            ports_rest = self.deserialize(self.fmt, res)
+            port_id = ports_rest['port']['id']
+            self.rpc.devices = {port_id: ports_rest['port']}
+            devices = [port_id]
+            ctx = context.get_admin_context()
+            sg_info = self.rpc.security_group_info_for_devices(
+                ctx, devices=devices)
+
+            expected = {sg_id: []}
+            self.assertEqual(expected, sg_info['security_groups'])
+            self._delete('ports', port_id)
 
     @contextlib.contextmanager
     def _port_with_addr_pairs_and_security_group(self):

@@ -13,6 +13,8 @@
 #    License for the specific language governing permissions and limitations
 #    under the License.
 
+import functools
+
 from oslo_config import cfg
 from oslo_log import log as logging
 from sqlalchemy.orm import exc
@@ -72,7 +74,7 @@ class DbBasePluginCommon(common_db_mixin.CommonDbMixin):
         )
         context.session.add(allocated)
 
-    def _make_subnet_dict(self, subnet, fields=None):
+    def _make_subnet_dict(self, subnet, fields=None, context=None):
         res = {'id': subnet['id'],
                'name': subnet['name'],
                'tenant_id': subnet['tenant_id'],
@@ -92,8 +94,10 @@ class DbBasePluginCommon(common_db_mixin.CommonDbMixin):
                'host_routes': [{'destination': route['destination'],
                                 'nexthop': route['nexthop']}
                                for route in subnet['routes']],
-               'shared': subnet['shared']
                }
+        # The shared attribute for a subnet is the same as its parent network
+        res['shared'] = self._make_network_dict(subnet.networks,
+                                                context=context)['shared']
         # Call auxiliary extend functions, if any
         self._apply_dict_extend_functions(attributes.SUBNETS, res, subnet)
         return self._fields(res, fields)
@@ -112,7 +116,8 @@ class DbBasePluginCommon(common_db_mixin.CommonDbMixin):
                'prefixes': [prefix['cidr']
                             for prefix in subnetpool['prefixes']],
                'ip_version': subnetpool['ip_version'],
-               'default_quota': subnetpool['default_quota']}
+               'default_quota': subnetpool['default_quota'],
+               'address_scope_id': subnetpool['address_scope_id']}
         return self._fields(res, fields)
 
     def _make_port_dict(self, port, fields=None,
@@ -159,6 +164,12 @@ class DbBasePluginCommon(common_db_mixin.CommonDbMixin):
         # NOTE(tidwellr): see note in _get_all_subnets()
         return context.session.query(models_v2.SubnetPool).all()
 
+    def _get_subnetpools_by_address_scope_id(self, context, address_scope_id):
+        # NOTE(vikram.choudhary): see note in _get_all_subnets()
+        subnetpool_qry = context.session.query(models_v2.SubnetPool)
+        return subnetpool_qry.filter_by(
+            address_scope_id=address_scope_id).all()
+
     def _get_port(self, context, id):
         try:
             port = self._get_by_id(context, models_v2.Port, id)
@@ -168,7 +179,8 @@ class DbBasePluginCommon(common_db_mixin.CommonDbMixin):
 
     def _get_dns_by_subnet(self, context, subnet_id):
         dns_qry = context.session.query(models_v2.DNSNameServer)
-        return dns_qry.filter_by(subnet_id=subnet_id).all()
+        return dns_qry.filter_by(subnet_id=subnet_id).order_by(
+            models_v2.DNSNameServer.order).all()
 
     def _get_route_by_subnet(self, context, subnet_id):
         route_qry = context.session.query(models_v2.SubnetRoute)
@@ -196,8 +208,10 @@ class DbBasePluginCommon(common_db_mixin.CommonDbMixin):
                      sorts=None, limit=None, marker=None,
                      page_reverse=False):
         marker_obj = self._get_marker_obj(context, 'subnet', limit, marker)
+        make_subnet_dict = functools.partial(self._make_subnet_dict,
+                                             context=context)
         return self._get_collection(context, models_v2.Subnet,
-                                    self._make_subnet_dict,
+                                    make_subnet_dict,
                                     filters=filters, fields=fields,
                                     sorts=sorts,
                                     limit=limit,
@@ -205,16 +219,25 @@ class DbBasePluginCommon(common_db_mixin.CommonDbMixin):
                                     page_reverse=page_reverse)
 
     def _make_network_dict(self, network, fields=None,
-                           process_extensions=True):
+                           process_extensions=True, context=None):
         res = {'id': network['id'],
                'name': network['name'],
                'tenant_id': network['tenant_id'],
                'admin_state_up': network['admin_state_up'],
                'mtu': network.get('mtu', constants.DEFAULT_NETWORK_MTU),
                'status': network['status'],
-               'shared': network['shared'],
                'subnets': [subnet['id']
                            for subnet in network['subnets']]}
+        # The shared attribute for a network now reflects if the network
+        # is shared to the calling tenant via an RBAC entry.
+        shared = False
+        matches = ('*',) + ((context.tenant_id,) if context else ())
+        for entry in network.rbac_entries:
+            if (entry.action == 'access_as_shared' and
+                    entry.target_tenant in matches):
+                shared = True
+                break
+        res['shared'] = shared
         # TODO(pritesh): Move vlan_transparent to the extension module.
         # vlan_transparent here is only added if the vlantransparent
         # extension is enabled.
@@ -227,8 +250,7 @@ class DbBasePluginCommon(common_db_mixin.CommonDbMixin):
                 attributes.NETWORKS, res, network)
         return self._fields(res, fields)
 
-    def _make_subnet_args(self, shared, detail,
-                          subnet, subnetpool_id):
+    def _make_subnet_args(self, detail, subnet, subnetpool_id):
         gateway_ip = str(detail.gateway_ip) if detail.gateway_ip else None
         args = {'tenant_id': detail.tenant_id,
                 'id': detail.subnet_id,
@@ -238,8 +260,7 @@ class DbBasePluginCommon(common_db_mixin.CommonDbMixin):
                 'cidr': str(detail.subnet_cidr),
                 'subnetpool_id': subnetpool_id,
                 'enable_dhcp': subnet['enable_dhcp'],
-                'gateway_ip': gateway_ip,
-                'shared': shared}
+                'gateway_ip': gateway_ip}
         if subnet['ip_version'] == 6 and subnet['enable_dhcp']:
             if attributes.is_attr_set(subnet['ipv6_ra_mode']):
                 args['ipv6_ra_mode'] = subnet['ipv6_ra_mode']

@@ -24,16 +24,18 @@ from oslo_config import cfg
 from oslo_utils import importutils
 
 from neutron.common import repos
+from neutron.common import utils
 
 
 # TODO(ihrachyshka): maintain separate HEAD files per branch
+HEAD_FILENAME = 'HEAD'
 HEADS_FILENAME = 'HEADS'
 CURRENT_RELEASE = "liberty"
 MIGRATION_BRANCHES = ('expand', 'contract')
 
 
 mods = repos.NeutronModules()
-VALID_SERVICES = map(mods.alembic_name, mods.installed_list())
+VALID_SERVICES = list(map(mods.alembic_name, mods.installed_list()))
 
 
 _core_opts = [
@@ -46,7 +48,10 @@ _core_opts = [
     cfg.StrOpt('service',
                choices=VALID_SERVICES,
                help=_("The advanced service to execute the command against. "
-                      "Can be one of '%s'.") % "', '".join(VALID_SERVICES))
+                      "Can be one of '%s'.") % "', '".join(VALID_SERVICES)),
+    cfg.BoolOpt('split_branches',
+                default=False,
+                help=_("Enforce using split branches file structure."))
 ]
 
 _quota_opts = [
@@ -125,28 +130,46 @@ def do_stamp(config, cmd):
                        sql=CONF.command.sql)
 
 
+def _get_branch_label(branch):
+    '''Get the latest branch label corresponding to release cycle.'''
+    return '%s_%s' % (CURRENT_RELEASE, branch)
+
+
 def _get_branch_head(branch):
     '''Get the latest @head specification for a branch.'''
-    return '%s_%s@head' % (CURRENT_RELEASE, branch)
+    return '%s@head' % _get_branch_label(branch)
 
 
 def do_revision(config, cmd):
     '''Generate new revision files, one per branch.'''
-    if _separate_migration_branches_supported(CONF):
+    addn_kwargs = {
+        'message': CONF.command.message,
+        'autogenerate': CONF.command.autogenerate,
+        'sql': CONF.command.sql,
+    }
+
+    if _use_separate_migration_branches(CONF):
         for branch in MIGRATION_BRANCHES:
             version_path = _get_version_branch_path(CONF, branch)
-            head = _get_branch_head(branch)
-            do_alembic_command(config, cmd,
-                               message=CONF.command.message,
-                               autogenerate=CONF.command.autogenerate,
-                               sql=CONF.command.sql,
-                               version_path=version_path,
-                               head=head)
+            addn_kwargs['version_path'] = version_path
+
+            if not os.path.exists(version_path):
+                # Bootstrap initial directory structure
+                utils.ensure_dir(version_path)
+                # Each new release stream of migrations is detached from
+                # previous migration chains
+                addn_kwargs['head'] = 'base'
+                # Mark the very first revision in the new branch with its label
+                addn_kwargs['branch_label'] = _get_branch_label(branch)
+                # TODO(ihrachyshka): ideally, we would also add depends_on here
+                # to refer to the head of the previous release stream. But
+                # alembic API does not support it yet.
+            else:
+                addn_kwargs['head'] = _get_branch_head(branch)
+
+            do_alembic_command(config, cmd, **addn_kwargs)
     else:
-        do_alembic_command(config, cmd,
-                           message=CONF.command.message,
-                           autogenerate=CONF.command.autogenerate,
-                           sql=CONF.command.sql)
+        do_alembic_command(config, cmd, **addn_kwargs)
     update_heads_file(config)
 
 
@@ -164,7 +187,7 @@ def validate_heads_file(config):
     '''Check that HEADS file contains the latest heads for each branch.'''
     script = alembic_script.ScriptDirectory.from_config(config)
     expected_heads = _get_sorted_heads(script)
-    heads_path = _get_heads_file_path(CONF)
+    heads_path = _get_active_head_file_path(CONF)
     try:
         with open(heads_path) as file_:
             observed_heads = file_.read().split()
@@ -181,7 +204,7 @@ def update_heads_file(config):
     '''Update HEADS file with the latest branch heads.'''
     script = alembic_script.ScriptDirectory.from_config(config)
     heads = _get_sorted_heads(script)
-    heads_path = _get_heads_file_path(CONF)
+    heads_path = _get_active_head_file_path(CONF)
     with open(heads_path, 'w+') as f:
         f.write('\n'.join(heads))
 
@@ -247,11 +270,27 @@ def _get_root_versions_dir(neutron_config):
         'db/migration/alembic_migrations/versions')
 
 
+def _get_head_file_path(neutron_config):
+    '''Return the path of the file that contains single head.'''
+    return os.path.join(
+        _get_root_versions_dir(neutron_config),
+        HEAD_FILENAME)
+
+
 def _get_heads_file_path(neutron_config):
     '''Return the path of the file that contains all latest heads, sorted.'''
     return os.path.join(
         _get_root_versions_dir(neutron_config),
         HEADS_FILENAME)
+
+
+def _get_active_head_file_path(neutron_config):
+    '''Return the path of the file that contains latest head(s), depending on
+       whether multiple branches are used.
+    '''
+    if _use_separate_migration_branches(neutron_config):
+        return _get_heads_file_path(neutron_config)
+    return _get_head_file_path(neutron_config)
 
 
 def _get_version_branch_path(neutron_config, branch=None):
@@ -261,10 +300,11 @@ def _get_version_branch_path(neutron_config, branch=None):
     return version_path
 
 
-def _separate_migration_branches_supported(neutron_config):
-    '''Detect whether split migration branches are supported.'''
-    # Use HEADS file to indicate the new, split migration world
-    return os.path.exists(_get_heads_file_path(neutron_config))
+def _use_separate_migration_branches(neutron_config):
+    '''Detect whether split migration branches should be used.'''
+    return (neutron_config.split_branches or
+            # Use HEADS file to indicate the new, split migration world
+            os.path.exists(_get_heads_file_path(neutron_config)))
 
 
 def _set_version_locations(config):
@@ -272,7 +312,7 @@ def _set_version_locations(config):
     version_paths = []
 
     version_paths.append(_get_version_branch_path(CONF))
-    if _separate_migration_branches_supported(CONF):
+    if _use_separate_migration_branches(CONF):
         for branch in MIGRATION_BRANCHES:
             version_paths.append(_get_version_branch_path(CONF, branch))
 

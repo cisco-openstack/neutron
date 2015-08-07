@@ -100,8 +100,13 @@ updating the core review team for the sub-project's repositories.
 | Area                   | Lieutenant                | IRC nick             |
 +========================+===========================+======================+
 | dragonflow             | Eran Gampel               | gampel               |
+|                        | Gal Sagie                 | gsagie               |
 +------------------------+---------------------------+----------------------+
 | networking-l2gw        | Sukhdev Kapur             | sukhdev              |
++------------------------+---------------------------+----------------------+
+| networking-midonet     | Ryu Ishimoto              | ryu_ishimoto         |
+|                        | Jaume Devesa              | devvesa              |
+|                        | YAMAMOTO Takashi          | yamamoto             |
 +------------------------+---------------------------+----------------------+
 | networking-odl         | Flavio Fernandes          | flaviof              |
 |                        | Kyle Mestery              | mestery              |
@@ -111,6 +116,8 @@ updating the core review team for the sub-project's repositories.
 | networking-ovn         | Russell Bryant            | russellb             |
 +------------------------+---------------------------+----------------------+
 | networking-plumgrid    | Fawad Khaliq              | fawadkhaliq          |
++------------------------+---------------------------+----------------------+
+| networking-sfc         | Cathy Zhang               | cathy                |
 +------------------------+---------------------------+----------------------+
 | networking-vshpere     | Vivekanandan Narasimhan   | viveknarasimhan      |
 +------------------------+---------------------------+----------------------+

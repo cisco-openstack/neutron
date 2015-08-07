@@ -17,6 +17,7 @@ from eventlet import greenthread
 from oslo_config import cfg
 from oslo_db import api as oslo_db_api
 from oslo_db import exception as os_db_exception
+from oslo_log import helpers as log_helpers
 from oslo_log import log
 from oslo_serialization import jsonutils
 from oslo_utils import excutils
@@ -39,7 +40,6 @@ from neutron.callbacks import resources
 from neutron.common import constants as const
 from neutron.common import exceptions as exc
 from neutron.common import ipv6_utils
-from neutron.common import log as neutron_log
 from neutron.common import rpc as n_rpc
 from neutron.common import topics
 from neutron.common import utils
@@ -54,7 +54,8 @@ from neutron.db import external_net_db
 from neutron.db import extradhcpopt_db
 from neutron.db import models_v2
 from neutron.db import netmtu_db
-from neutron.db import quota_db  # noqa
+from neutron.db.quota import driver  # noqa
+from neutron.db import securitygroups_db
 from neutron.db import securitygroups_rpc_base as sg_db_rpc
 from neutron.db import vlantransparent_db
 from neutron.extensions import allowedaddresspairs as addr_pair
@@ -74,6 +75,7 @@ from neutron.plugins.ml2 import driver_context
 from neutron.plugins.ml2 import managers
 from neutron.plugins.ml2 import models
 from neutron.plugins.ml2 import rpc
+from neutron.quota import resource_registry
 
 LOG = log.getLogger(__name__)
 
@@ -126,6 +128,13 @@ class Ml2Plugin(db_base_plugin_v2.NeutronDbPluginV2,
             self._aliases = aliases
         return self._aliases
 
+    @resource_registry.tracked_resources(
+        network=models_v2.Network,
+        port=models_v2.Port,
+        subnet=models_v2.Subnet,
+        subnetpool=models_v2.SubnetPool,
+        security_group=securitygroups_db.SecurityGroup,
+        security_group_rule=securitygroups_db.SecurityGroupRule)
     def __init__(self):
         # First load drivers, then initialize DB, then initialize drivers
         self.type_manager = managers.TypeManager()
@@ -162,7 +171,7 @@ class Ml2Plugin(db_base_plugin_v2.NeutronDbPluginV2,
         )
         self.start_periodic_dhcp_agent_status_check()
 
-    @neutron_log.log
+    @log_helpers.log_method_call
     def start_rpc_listeners(self):
         """Start the RPC loop to let the plugin communicate with agents."""
         self.topic = topics.PLUGIN
@@ -846,7 +855,7 @@ class Ml2Plugin(db_base_plugin_v2.NeutronDbPluginV2,
         while True:
             with session.begin(subtransactions=True):
                 record = self._get_subnet(context, id)
-                subnet = self._make_subnet_dict(record, None)
+                subnet = self._make_subnet_dict(record, None, context=context)
                 qry_allocated = (session.query(models_v2.IPAllocation).
                                  filter_by(subnet_id=id).
                                  join(models_v2.Port))
@@ -864,7 +873,8 @@ class Ml2Plugin(db_base_plugin_v2.NeutronDbPluginV2,
                 allocated = qry_allocated.all()
                 # Delete all the IPAllocation that can be auto-deleted
                 if allocated:
-                    map(session.delete, allocated)
+                    for x in allocated:
+                        session.delete(x)
                 LOG.debug("Ports to auto-deallocate: %s", allocated)
                 # Check if there are more IP allocations, unless
                 # is_auto_address_subnet is True. In that case the check is
@@ -1124,6 +1134,10 @@ class Ml2Plugin(db_base_plugin_v2.NeutronDbPluginV2,
             mech_context = driver_context.PortContext(
                 self, context, updated_port, network, binding, levels,
                 original_port=original_port)
+            new_host_port = self._get_host_port_if_changed(
+                mech_context, attrs)
+            need_port_update_notify |= self._process_port_binding(
+                mech_context, attrs)
             # For DVR router interface ports we need to retrieve the
             # DVRPortbinding context instead of the normal port context.
             # The normal Portbinding context does not have the status
@@ -1150,10 +1164,6 @@ class Ml2Plugin(db_base_plugin_v2.NeutronDbPluginV2,
                 self.mechanism_manager.update_port_precommit(mech_context)
                 bound_mech_contexts.append(mech_context)
 
-            new_host_port = self._get_host_port_if_changed(
-                mech_context, attrs)
-            need_port_update_notify |= self._process_port_binding(
-                mech_context, attrs)
         # Notifications must be sent after the above transaction is complete
         kwargs = {
             'context': context,
@@ -1484,7 +1494,7 @@ class Ml2Plugin(db_base_plugin_v2.NeutronDbPluginV2,
         port_ids_to_devices = dict(
             (self._device_to_port_id(context, device), device)
             for device in devices)
-        port_ids = port_ids_to_devices.keys()
+        port_ids = list(port_ids_to_devices.keys())
         ports = db.get_ports_and_sgs(context, port_ids)
         for port in ports:
             # map back to original requested id

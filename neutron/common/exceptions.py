@@ -69,6 +69,10 @@ class ServiceUnavailable(NeutronException):
     message = _("The service is unavailable")
 
 
+class NotSupported(NeutronException):
+    message = _('Not supported: %(msg)s')
+
+
 class AdminRequired(NotAuthorized):
     message = _("User does not have admin privileges: %(reason)s")
 
@@ -443,6 +447,21 @@ class IllegalSubnetPoolPrefixUpdate(BadRequest):
 
 class SubnetAllocationError(NeutronException):
     message = _("Failed to allocate subnet: %(reason)s")
+
+
+class AddressScopePrefixConflict(Conflict):
+    message = _("Failed to associate address scope: subnetpools "
+                "within an address scope must have unique prefixes")
+
+
+class IllegalSubnetPoolAssociationToAddressScope(BadRequest):
+    message = _("Illegal subnetpool association: subnetpool %(subnetpool_id)s "
+                " cannot be associated with address scope"
+                " %(address_scope_id)s")
+
+
+class IllegalSubnetPoolUpdate(BadRequest):
+    message = _("Illegal subnetpool update : %(reason)s")
 
 
 class MinPrefixSubnetAllocationError(BadRequest):

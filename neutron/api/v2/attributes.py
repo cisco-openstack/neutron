@@ -180,9 +180,8 @@ def _validate_mac_address(data, valid_values=None):
 
 
 def _validate_mac_address_or_none(data, valid_values=None):
-    if data is None:
-        return
-    return _validate_mac_address(data, valid_values)
+    if data is not None:
+        return _validate_mac_address(data, valid_values)
 
 
 def _validate_ip_address(data, valid_values=None):
@@ -308,9 +307,8 @@ def _validate_hostroutes(data, valid_values=None):
 
 
 def _validate_ip_address_or_none(data, valid_values=None):
-    if data is None:
-        return None
-    return _validate_ip_address(data, valid_values)
+    if data is not None:
+        return _validate_ip_address(data, valid_values)
 
 
 def _validate_subnet(data, valid_values=None):
@@ -348,9 +346,8 @@ def _validate_subnet_list(data, valid_values=None):
 
 
 def _validate_subnet_or_none(data, valid_values=None):
-    if data is None:
-        return
-    return _validate_subnet(data, valid_values)
+    if data is not None:
+        return _validate_subnet(data, valid_values)
 
 
 def _validate_regex(data, valid_values=None):
@@ -366,9 +363,18 @@ def _validate_regex(data, valid_values=None):
 
 
 def _validate_regex_or_none(data, valid_values=None):
-    if data is None:
-        return
-    return _validate_regex(data, valid_values)
+    if data is not None:
+        return _validate_regex(data, valid_values)
+
+
+def _validate_subnetpool_id(data, valid_values=None):
+    if data != constants.IPV6_PD_POOL_ID:
+        return _validate_uuid_or_none(data, valid_values)
+
+
+def _validate_subnetpool_id_or_none(data, valid_values=None):
+    if data is not None:
+        return _validate_subnetpool_id(data, valid_values)
 
 
 def _validate_uuid(data, valid_values=None):
@@ -578,7 +584,7 @@ def convert_none_to_empty_dict(value):
 def convert_to_list(data):
     if data is None:
         return []
-    elif hasattr(data, '__iter__'):
+    elif hasattr(data, '__iter__') and not isinstance(data, six.string_types):
         return list(data)
     else:
         return [data]
@@ -617,6 +623,8 @@ validators = {'type:dict': _validate_dict,
               'type:subnet': _validate_subnet,
               'type:subnet_list': _validate_subnet_list,
               'type:subnet_or_none': _validate_subnet_or_none,
+              'type:subnetpool_id': _validate_subnetpool_id,
+              'type:subnetpool_id_or_none': _validate_subnetpool_id_or_none,
               'type:uuid': _validate_uuid,
               'type:uuid_or_none': _validate_uuid_or_none,
               'type:uuid_list': _validate_uuid_list,
@@ -747,7 +755,7 @@ RESOURCE_ATTRIBUTE_MAP = {
                           'allow_put': False,
                           'default': ATTR_NOT_SPECIFIED,
                           'required_by_policy': False,
-                          'validate': {'type:uuid_or_none': None},
+                          'validate': {'type:subnetpool_id_or_none': None},
                           'is_visible': True},
         'prefixlen': {'allow_post': True,
                       'allow_put': False,

@@ -733,14 +733,7 @@ class PhysicalL3RouterApplianceDBMixin(
         credentials = {'username': cfg.CONF.hosting_devices.csr1kv_username,
                        'password': cfg.CONF.hosting_devices.csr1kv_password}
         mgmt_ip = "1.1.1.1"
-        phy_router_db = self._get_phy_router_port_db(context, rid)
-        if not phy_router_db:
-            host_id = "aaaaaaaa-1234-5678-9876-zzzzzzzzzzzz"
-        else:
-            host_id = phy_router_db['phy_router_id']
-        LOG.debug("_get_router_info_for_agent rid:%s host_id:%s" %
-                  (rid, host_id))
-        return {'id': host_id,
+        return {'id': rid,
                 'credentials': credentials,
                 'management_ip_address': mgmt_ip,
                 'protocol_port': 443,

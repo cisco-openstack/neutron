@@ -227,6 +227,27 @@ class RoutingServiceHelper(object):
             LOG.exception(_("Failed processing routers"))
             self.fullsync = True
 
+    def _get_num_routers_per_hd(self, router_infos):
+        """Fetch router dict of the num of routers per hd from the plugin.
+
+           :param num_hd_routers: List of routers in a hd
+           :return: Dict of this format:
+                    { "hd_1": {routers:<num>}, "hd_2": {routers:<num>},... }
+        """
+        if not router_infos:
+            return {}
+
+        num_hd_routers = collections.defaultdict(int)
+        for ri in router_infos:
+            hd = ri.router['hosting_device']
+            if hd:
+                num_hd_routers[hd['id']] += 1
+
+        if not num_hd_routers:
+            return {}
+        return dict((hd_id, {'routers': num})
+                    for hd_id, num in num_hd_routers.items())
+
     def collect_state(self, configurations):
         """Collect state from this helper.
 
@@ -239,8 +260,6 @@ class RoutingServiceHelper(object):
         num_interfaces = 0
         num_floating_ips = 0
         router_infos = self.router_info.values()
-        num_routers = len(router_infos)
-        num_hd_routers = collections.defaultdict(int)
         for ri in router_infos:
             ex_gw_port = ri.router.get('gw_port')
             if ex_gw_port:
@@ -249,11 +268,8 @@ class RoutingServiceHelper(object):
                 l3_constants.INTERFACE_KEY, []))
             num_floating_ips += len(ri.router.get(
                 l3_constants.FLOATINGIP_KEY, []))
-            hd = ri.router['hosting_device']
-            if hd:
-                num_hd_routers[hd['id']] += 1
-        routers_per_hd = dict((hd_id, {'routers': num})
-                              for hd_id, num in num_hd_routers.items())
+        routers_per_hd = self._get_num_routers_per_hd(router_infos)
+        num_routers = len(self.router_info.values())
         non_responding = self._dev_status.get_backlogged_hosting_devices()
         configurations['total routers'] = num_routers
         configurations['total ex_gw_ports'] = num_ex_gw_ports

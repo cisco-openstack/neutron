@@ -13,6 +13,7 @@
 #    License for the specific language governing permissions and limitations
 #    under the License.
 
+import collections
 import eventlet
 
 from oslo import messaging
@@ -22,6 +23,7 @@ from neutron.common import rpc as n_rpc
 from neutron.common import topics
 from neutron import context as n_context
 from neutron.openstack.common import excutils
+from neutron.openstack.common import jsonutils
 from neutron.openstack.common import log as logging
 
 from neutron.plugins.cisco.cfg_agent import cfg_exceptions
@@ -64,6 +66,8 @@ class RouterInfo(object):
         self.routes = []
         self.ha_info = router.get('ha_info')
         self.ha_gw_ports = []
+        LOG.debug("__init__: RouterInfo: %s",
+                 jsonutils.dumps(self.router, indent=4))
 
     @property
     def router(self):
@@ -178,6 +182,7 @@ class PhyRouterContext(routing_svc_helper.RoutingServiceHelper):
         :return: None
         """
         ri = RouterInfo(router_id, router)
+        LOG.debug("router_added: %s", jsonutils.dumps(ri.router, indent=4))
         driver = self._drivermgr.set_driver(router)
         driver.router_added(ri)
         self.router_info[router_id] = ri
@@ -198,6 +203,7 @@ class PhyRouterContext(routing_svc_helper.RoutingServiceHelper):
         if ri:
             ri.router[l3_constants.HA_GW_KEY] = []
         super(PhyRouterContext, self)._router_removed(router_id, deconfigure)
+        LOG.debug("router_removed: %s", jsonutils.dumps(ri.router, indent=4))
 
     def _internal_network_removed(self, ri, port, ex_gw_port):
         driver = self._drivermgr.get_driver(ri.id)
@@ -500,6 +506,26 @@ class PhyRouterContext(routing_svc_helper.RoutingServiceHelper):
                                     fip['fixed_ip_address'])
             ri.floating_ips.append(fip)
 
+    def _get_num_routers_per_hd(self, router_infos):
+        if not router_infos:
+            return {}
+
+        dict_of_asrs_by_device_ids = collections.defaultdict(set)
+        for ri in router_infos:
+            intfs = ri.router.get('_interfaces')
+            if not intfs:
+                continue
+            for intf in intfs:
+                asr = intf.get('phy_router_db')
+                device_id = intf.get('device_id')
+                if not asr or not device_id:
+                    continue
+                dict_of_asrs_by_device_ids[asr['id']].add(device_id)
+        routers_per_hd = {}
+        for r in dict_of_asrs_by_device_ids:
+            routers_per_hd[r] = len(dict_of_asrs_by_device_ids[r])
+        return routers_per_hd
+
 
 class RoutingServiceHelperWithPhyContext(
         routing_svc_helper.RoutingServiceHelper):
@@ -523,13 +549,13 @@ class RoutingServiceHelperWithPhyContext(
 
     def router_deleted(self, context, routers):
         """Deal with router deletion RPC message."""
-        LOG.debug('Got router deleted notification for %s', routers)
+        LOG.debug('Got asr router deleted notification for %s', routers)
         for asr_name, asr_ctx in self._asr_contexts.iteritems():
             asr_ctx.removed_routers.update(routers)
 
     def routers_updated(self, context, routers):
         """Deal with routers modification and creation RPC message."""
-        LOG.debug('Got routers updated notification :%s', routers)
+        LOG.debug('Got asr routers updated notification :%s', routers)
         if routers:
             # This is needed for backward compatibility
             if isinstance(routers[0], dict):
@@ -538,12 +564,12 @@ class RoutingServiceHelperWithPhyContext(
                 asr_ctx.updated_routers.update(routers)
 
     def router_removed_from_agent(self, context, payload):
-        LOG.debug('Got router removed from agent :%r', payload)
+        LOG.debug('Got asr router removed from agent :%r', payload)
         for asr_name, asr_ctx in self._asr_contexts.iteritems():
             asr_ctx.removed_routers.add(payload['router_id'])
 
     def router_added_to_agent(self, context, payload):
-        LOG.debug('Got router added to agent :%r', payload)
+        LOG.debug('Got asr router added to agent :%r', payload)
         self.routers_updated(context, payload)
 
     ### General Notifications  ####

@@ -180,15 +180,20 @@ class ASR1kRoutingDriver(csr1kv_driver.CSR1kvRoutingDriver):
 
     def _port_needs_config(self, port):
         if not self._port_is_hsrp(port):
-            LOG.info(_("ignoring non-HSRP interface"))
+            LOG.debug(_("ignoring non-HSRP interface"))
             return False
 
         if not port['phy_router_db']:
+            LOG.debug("_port_needs_config: no phy router info: %s", port)
+            return False
+
+        if not port['phy_router_db']:
+            LOG.debug("_port_needs_config: %s not phy_router_db: %s", port)
             return False
 
         asr_ent = self._get_asr_ent_from_port(port)
         if asr_ent['name'] != self.target_asr['name']:
-            LOG.info(_("ignoring interface for non-target ASR"))
+            LOG.debug("ignoring interface for non-target ASR %s", port)
             return False
 
         return True

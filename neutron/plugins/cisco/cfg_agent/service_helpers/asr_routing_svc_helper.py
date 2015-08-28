@@ -119,6 +119,14 @@ class PhyCiscoRoutingPluginApi(n_rpc.RpcProxy):
                          topic=self.topic,
                          timeout=180)
 
+    def update_floatingip_statuses(self, context, router_id, fip_statuses):
+        """Call the plugin update floating IPs's operational status."""
+        return self.call(context,
+                         self.make_msg('update_floatingip_statuses',
+                                       router_id=router_id,
+                                       fip_statuses=fip_statuses),
+                         version='1.1')
+
     def agent_heartbeat(self, context):
         """Make a remote process call to check connectivity between
            agent and neutron-server
@@ -434,7 +442,7 @@ class PhyRouterContext(routing_svc_helper.RoutingServiceHelper):
 
         Compare current floatingips (in ri.floating_ips) with the router's
         updated floating ips (in ri.router.floating_ips) and detect
-        flaoting_ips which were added or removed. Notify driver of
+        floating_ips which were added or removed. Notify driver of
         the change via `floating_ip_added()` or `floating_ip_removed()`.
 
         :param ri:  RouterInfo object of the router being processed.
@@ -469,17 +477,23 @@ class PhyRouterContext(routing_svc_helper.RoutingServiceHelper):
 
         floating_ip_ids_to_remove = (existing_floating_ip_ids -
                                      cur_floating_ip_ids)
-
+        LOG.debug("fip_ids_to_add: %s" % (fips_to_add))
         LOG.debug("fip_ids_to_remove: %s" % (floating_ip_ids_to_remove))
 
         fips_to_remove = []
+        fip_statuses = {}
         for fip in ri.floating_ips:
             if fip['id'] in floating_ip_ids_to_remove:
                 fips_to_remove.append(fip)
                 self._floating_ip_removed(ri, ri.ex_gw_port,
                                           fip['floating_ip_address'],
                                           fip['fixed_ip_address'])
-
+                fip_statuses[fip['id']] = l3_constants.FLOATINGIP_STATUS_DOWN
+                LOG.debug("Add to fip_statuses DOWN id:%s fl_ip:%s fx_ip:%s",
+                        fip['id'], fip['floating_ip_address'],
+                        fip['fixed_ip_address'])
+                self.plugin_rpc.update_floatingip_statuses(self.context,
+                        ri.router_id, fip_statuses)
             else:
                 # handle remapping of a floating IP
                 new_fip = id_to_fip_map[fip['id']]
@@ -496,6 +510,8 @@ class PhyRouterContext(routing_svc_helper.RoutingServiceHelper):
                                               existing_fixed_ip)
                     fips_to_remove.append(fip)
                     fips_to_add.append(new_fip)
+                    fip_statuses[fip['id']] = \
+                        l3_constants.FLOATINGIP_STATUS_DOWN
 
         for fip in fips_to_remove:
             ri.floating_ips.remove(fip)
@@ -505,6 +521,15 @@ class PhyRouterContext(routing_svc_helper.RoutingServiceHelper):
                                     fip['floating_ip_address'],
                                     fip['fixed_ip_address'])
             ri.floating_ips.append(fip)
+            fip_statuses[fip['id']] = l3_constants.FLOATINGIP_STATUS_ACTIVE
+            LOG.debug("Add to fip_statuses ACTIVE id:%s fl_ip:%s fx_ip:%s",
+                    fip['id'], fip['floating_ip_address'],
+                    fip['fixed_ip_address'])
+
+        if fip_statuses:
+            LOG.debug("Sending floatingip_statuses_update: %s", fip_statuses)
+            self.plugin_rpc.update_floatingip_statuses(self.context,
+                    ri.router_id, fip_statuses)
 
     def _get_num_routers_per_hd(self, router_infos):
         if not router_infos:

@@ -95,6 +95,15 @@ class PhysicalL3RouterApplianceDBMixin(
             self.l3_cfg_rpc_notifier.routers_updated(context, router_dicts,
                                                      operation, data)
 
+    def create_floatingip(self, context, floatingip):
+        """ Function that creates a floating IP and sets the status to DOWN.
+            Status changes to ACTIVE when it gets associated to a fixed IP
+        """
+        LOG.debug("create_floatingip: %s", floatingip)
+        return super(PhysicalL3RouterApplianceDBMixin,
+                    self).create_floatingip(context, floatingip,
+                    l3_constants.FLOATINGIP_STATUS_DOWN)
+
     def sync_asr_list_with_db(self, context, asr_list):
 
         if self._db_synced is True:

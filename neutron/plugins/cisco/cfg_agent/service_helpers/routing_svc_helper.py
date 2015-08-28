@@ -476,7 +476,7 @@ class RoutingServiceHelper(object):
 
         Compare current floatingips (in ri.floating_ips) with the router's
         updated floating ips (in ri.router.floating_ips) and detect
-        flaoting_ips which were added or removed. Notify driver of
+        floating_ips which were added or removed. Notify driver of
         the change via `floating_ip_added()` or `floating_ip_removed()`.
 
         :param ri:  RouterInfo object of the router being processed.

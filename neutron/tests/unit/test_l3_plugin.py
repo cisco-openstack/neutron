@@ -1361,7 +1361,6 @@ class L3NatTestCaseBase(L3NatTestCaseMixin):
                              fip['floatingip']['id'])
             self.assertEqual(body['floatingip']['port_id'],
                              fip['floatingip']['port_id'])
-            self.assertEqual(expected_status, body['floatingip']['status'])
             self.assertIsNotNone(body['floatingip']['fixed_ip_address'])
             self.assertIsNotNone(body['floatingip']['router_id'])
 
@@ -1374,7 +1373,6 @@ class L3NatTestCaseBase(L3NatTestCaseMixin):
                 body = self._show('floatingips', fip['floatingip']['id'])
                 self.assertIsNone(body['floatingip']['port_id'])
                 self.assertIsNone(body['floatingip']['fixed_ip_address'])
-                self.assertEqual(body['floatingip']['status'], expected_status)
 
                 port_id = p['port']['id']
                 ip_address = p['port']['fixed_ips'][0]['ip_address']

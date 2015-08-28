@@ -12,10 +12,12 @@
 #    License for the specific language governing permissions and limitations
 #    under the License.
 
+from neutron.common import constants as l3_constants
 from neutron.common import rpc as n_rpc
 from neutron.common import topics
 from neutron.db import agents_db
 from neutron.db import common_db_mixin
+from neutron.extensions import l3
 from neutron import manager
 from neutron.openstack.common import log as logging
 from neutron.plugins.cisco.db.l3 import asr_l3_router_appliance_db
@@ -62,6 +64,30 @@ class CiscoRouterPluginRpcCallbacks(n_rpc.RpcCallback,
 
         LOG.debug("host %s", host)
         return "OK"
+
+    def update_floatingip_statuses(self, context, router_id, fip_statuses):
+        """Update operational status for a floating IP."""
+
+        with context.session.begin(subtransactions=True):
+            for (floatingip_id, status) in fip_statuses.iteritems():
+                LOG.debug(_("New status for floating IP %(floatingip_id)s: "
+                        "%(status)s"), {'floatingip_id': floatingip_id,
+                                        'status': status})
+                try:
+                    self._l3plugin.update_floatingip_status(context,
+                                                           floatingip_id,
+                                                           status)
+                except l3.FloatingIPNotFound:
+                    LOG.debug(_("Floating IP: %s no longer present."),
+                              floatingip_id)
+            known_router_fips = self._l3plugin.get_floatingips(
+                context, {'last_known_router_id': [router_id]})
+            fips_to_disable = (fip['id'] for fip in known_router_fips
+                               if not fip['router_id'])
+            for fip_id in fips_to_disable:
+                LOG.debug("update_fip_statuses: disable: %s", fip_id)
+                self._l3plugin.update_floatingip_status(
+                    context, fip_id, l3_constants.FLOATINGIP_STATUS_DOWN)
 
 
 class PhysicalCiscoRouterPlugin(common_db_mixin.CommonDbMixin,

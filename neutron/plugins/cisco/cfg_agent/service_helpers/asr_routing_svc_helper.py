@@ -127,6 +127,12 @@ class PhyCiscoRoutingPluginApi(n_rpc.RpcProxy):
                                        fip_statuses=fip_statuses),
                          version='1.1')
 
+    def send_update_port_statuses(self, context, port_ids, status):
+        """Call the plugin to update the port status which updates the DB."""
+        return self.call(context,
+                         self.make_msg('asr_update_port_statuses',
+                                       port_ids=port_ids, status=status))
+
     def agent_heartbeat(self, context):
         """Make a remote process call to check connectivity between
            agent and neutron-server
@@ -383,6 +389,26 @@ class PhyRouterContext(routing_svc_helper.RoutingServiceHelper):
 
         return old_ports, new_ports
 
+    def _send_update_port_statuses(self, port_ids, status):
+        """Sends update notifications to set the operational status of the
+        list of router ports provided. To make each notification doesn't exceed
+        the RPC length, each message contains a maximum of MAX_PORTS_IN_BATCH
+        port ids.
+
+        :param port_ids: List of ports to update the status
+        :param status: operational status to update
+                       (ex: l3_constants.PORT_STATUS_ACTIVE)
+        """
+        if not port_ids:
+            return
+        i = 0
+        MAX_PORTS_IN_BATCH = 50
+        list_chunks_ports = [port_ids[i:i + MAX_PORTS_IN_BATCH]
+            for i in xrange(0, len(port_ids), MAX_PORTS_IN_BATCH)]
+        for chunk_ports in list_chunks_ports:
+            self.plugin_rpc.send_update_port_statuses(self.context,
+                            chunk_ports, status)
+
     def _process_router(self, ri):
         """Process a router, apply latest configuration and update router_info.
 
@@ -409,6 +435,7 @@ class PhyRouterContext(routing_svc_helper.RoutingServiceHelper):
                     ri.internal_ports, internal_ports)
             (old_gw_ports, new_gw_ports) = self._get_port_set_diffs(
                     ri.ha_gw_ports, gw_ports)
+            list_port_ids_up = []
 
             for p in old_ports:
                 self._internal_network_removed(ri, p, ri.ex_gw_port)
@@ -418,6 +445,7 @@ class PhyRouterContext(routing_svc_helper.RoutingServiceHelper):
                 self._set_subnet_info(p)
                 self._internal_network_added(ri, p, ex_gw_port)
                 ri.internal_ports.append(p)
+                list_port_ids_up.append(p['id'])
 
             for p in old_gw_ports:
                 self._external_gateway_removed(ri, p)
@@ -427,9 +455,11 @@ class PhyRouterContext(routing_svc_helper.RoutingServiceHelper):
                 self._set_subnet_info(p)
                 self._external_gateway_added(ri, p)
                 ri.ha_gw_ports.append(p)
+                list_port_ids_up.append(p['id'])
 
+            self._send_update_port_statuses(list_port_ids_up,
+                l3_constants.PORT_STATUS_ACTIVE)
             self._process_router_floating_ips(ri, ex_gw_port)
-
             ri.ex_gw_port = ex_gw_port
             self._routes_updated(ri)
         except cfg_exceptions.DriverException as e:

@@ -89,6 +89,12 @@ class CiscoRouterPluginRpcCallbacks(n_rpc.RpcCallback,
                 self._l3plugin.update_floatingip_status(
                     context, fip_id, l3_constants.FLOATINGIP_STATUS_DOWN)
 
+    def asr_update_port_statuses(self, context, port_ids, status):
+        """Update the operational statuses of a list of router ports."""
+        with context.session.begin(subtransactions=True):
+            self._l3plugin.update_router_port_statuses(context, port_ids,
+                                                       status)
+
 
 class PhysicalCiscoRouterPlugin(common_db_mixin.CommonDbMixin,
         agents_db.AgentDbMixin,

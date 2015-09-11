@@ -104,6 +104,15 @@ class PhysicalL3RouterApplianceDBMixin(
                     self).create_floatingip(context, floatingip,
                     l3_constants.FLOATINGIP_STATUS_DOWN)
 
+    def update_router_port_statuses(self, context, port_ids, status):
+        """ Function that gets called when asr plugin notifies about
+            router port status changes. By default, all ports are created
+            with status set to DOWN and when the ASR plugin creates the
+            port it notifies the DB to change the status to ACTIVE
+        """
+        for port_id in port_ids:
+            self._core_plugin.update_port_status(context, port_id, status)
+
     def sync_asr_list_with_db(self, context, asr_list):
 
         if self._db_synced is True:

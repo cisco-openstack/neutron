@@ -599,75 +599,95 @@ class PhysicalL3RouterApplianceDBMixin(
                   (elapsed_time))
         return routers_dict.values()
 
-    def get_sync_data(self, context, router_ids=None, active=None):
+    def get_sync_all_interfaces(self, context, router_ids, device_owners=None,
+                                full_sync=False):
+        """In full sync case, it queries for all the router interfaces.
+           Otherwise, it returns the interfaces for list of router_ids provided
+           as a parameter.
+           Including the list of router_ids in the query for fullsync it's very
+           expensive in a high scale scenario.
+        """
+        if not full_sync:
+            return super(l3_router_appliance_db.L3RouterApplianceDBMixin,
+                       self).get_sync_interfaces(context, router_ids,
+                                                 device_owners)
+        if not device_owners:
+            device_owners = [l3_constants.DEVICE_OWNER_ROUTER_INTF]
+
+        qry = context.session.query(l3_db.RouterPort)
+        qry = qry.filter(l3_db.RouterPort.port_type.in_(device_owners))
+        ports = [rp.port.id for rp in qry]
+
+        interfaces = self._core_plugin.get_ports(context, {'id': ports})
+        if interfaces:
+            self._populate_subnet_for_ports(context, interfaces)
+        return interfaces
+
+    def get_sync_data(self, context, full_sync=False, router_ids=None,
+                      active=None):
         """Query routers and their related floating_ips, interfaces."""
         with context.session.begin(subtransactions=True):
             start_time = time.time()
             time1 = time.time()
-            LOG.info(_("TIMING DATA FOR get_sync_data"))
             routers = self._get_sync_routers(context,
                                              router_ids=router_ids,
                                              active=active)
             time2 = time.time()
-            LOG.info(_("  _get_sync_routers: %ss") % (time2 - time1))
-            time1 = time2
+            LOG.debug("  _get_sync_routers: %ss", time2 - time1)
 
+            time1 = time2
             router_ids = [router['id'] for router in routers]
             floating_ips = self._get_sync_floating_ips(context, router_ids)
-
             time2 = time.time()
-            LOG.info(_("_get_sync_floating_ips: %ss") % (time2 - time1))
+            LOG.debug("_get_sync_floating_ips: %ss", time2 - time1)
+
             time1 = time2
-
-            interfaces = self.get_sync_interfaces(context, router_ids)
-
+            device_owners = [l3_constants.DEVICE_OWNER_ROUTER_INTF,
+                   l3_constants.DEVICE_OWNER_ROUTER_HA_INTF,
+                   l3_constants.DEVICE_OWNER_ROUTER_HA_GW,
+                   l3_constants.DEVICE_OWNER_ROUTER_GW]
+            all_interfaces = self.get_sync_all_interfaces(context, router_ids,
+                                   device_owners, full_sync)
+            interfaces = []
+            ha_interfaces = []
+            ha_gw_interfaces = []
+            gw_interfaces = []
+            for intf in all_interfaces:
+                owner = intf['device_owner']
+                if owner == l3_constants.DEVICE_OWNER_ROUTER_INTF:
+                    interfaces.append(intf)
+                elif owner == l3_constants.DEVICE_OWNER_ROUTER_HA_INTF:
+                    ha_interfaces.append(intf)
+                elif owner == l3_constants.DEVICE_OWNER_ROUTER_HA_GW:
+                    ha_gw_interfaces.append(intf)
+                elif owner == l3_constants.DEVICE_OWNER_ROUTER_GW:
+                    gw_interfaces.append(intf)
             time2 = time.time()
-            LOG.debug("_get_sync_interfaces normal: %ss" % (time2 - time1))
+            LOG.debug("_get_sync_interfaces: %ss", time2 - time1)
+
             time1 = time2
-
-            ha_interfaces = self.get_sync_interfaces(context, router_ids,
-                                 [l3_constants.DEVICE_OWNER_ROUTER_HA_INTF])
-
-            time2 = time.time()
-            LOG.info(_("_get_sync_interfaces HA: %ss") % (time2 - time1))
-            time1 = time2
-
-            ha_gw_interfaces = self.get_sync_interfaces(context, router_ids,
-                                     [l3_constants.DEVICE_OWNER_ROUTER_HA_GW])
-
-            time2 = time.time()
-            LOG.info(_("_get_sync_routers HA_GW: %ss") % (time2 - time1))
-            time1 = time2
-            gw_interfaces = self.get_sync_interfaces(context, router_ids,
-                                     [l3_constants.DEVICE_OWNER_ROUTER_GW])
-
-            time2 = time.time()
-            LOG.info(_("_get_sync_interfaces GW: %ss") % (time2 - time1))
-            time1 = time2
-
-            # Retrieve physical router port bindings
+            # Retrieve physical router port bindings:
+            # After performance analysis with scale scenarios, we found out
+            # that it's more efficient to query once the DB, create a dict
+            # with that info and then do a lookup in the dict.
+            # Because of the small size of current DB tables we are querying,
+            # the amount of memory used for these dicts shouldn't be an issue.
             all_ha_interfaces = ha_interfaces + ha_gw_interfaces
+            phy_port_dict = {}
+            for phy_port in context.session.query(
+                            CiscoPhyRouterPortBinding).all():
+                phy_port_dict[phy_port['port_id']] = phy_port
+            phy_router_dict = {}
+            for phy_router in context.session.query(CiscoPhysicalRouter).all():
+                phy_router_dict[phy_router['id']] = phy_router
             for ha_intf in all_ha_interfaces:
                 port_id = ha_intf['id']
-                phy_port_qry = context.session.query(CiscoPhyRouterPortBinding,
-                                      CiscoPhysicalRouter)
-                phy_port_qry = phy_port_qry.filter(
-                    CiscoPhyRouterPortBinding.port_id == port_id)
-                router_id = CiscoPhysicalRouter.id
-                phy_port_qry = phy_port_qry.filter(
-                    CiscoPhyRouterPortBinding.phy_router_id == router_id)
-                try:
-                    port_binding_db, phy_router_db = phy_port_qry.first()
-                except TypeError:
-                    LOG.debug("_get_sync_interfaces: Unable to get phy_port")
-                    port_binding_db = {}
-                    phy_router_db = {}
-
-                ha_intf['port_binding_db'] = port_binding_db
-                ha_intf['phy_router_db'] = phy_router_db
+                ha_intf['port_binding_db'] = phy_port_dict.get(port_id, {})
+                ha_intf['phy_router_db'] = phy_router_dict.get(
+                        ha_intf['port_binding_db'].get('phy_router_id'), {})
 
             time2 = time.time()
-            LOG.info(_("  _phy_port_binding: %ss") % (time2 - time1))
+            LOG.debug("  _phy_port_binding: %ss", time2 - time1)
             time1 = time2
 
             interfaces += ha_interfaces
@@ -680,18 +700,32 @@ class PhysicalL3RouterApplianceDBMixin(
                                        ha_gw_interfaces)
 
     @lockutils.synchronized('router-change', 'neutron-', external=True)
-    def get_sync_data_ext(self, context, router_ids=None, active=None):
+    def get_sync_data_ext(self, context, full_sync=False, router_ids=None,
+                          active=None):
         """Query routers and their related floating_ips, interfaces.
 
         Adds information about hosting device as well as trunking.
         """
         with context.session.begin(subtransactions=True):
-            sync_data = self.get_sync_data(context, router_ids, active)
+            sync_data = self.get_sync_data(context, full_sync, router_ids,
+                                           active)
 
             start_time = time.time()
-
-            LOG.info(_("TIMING DATA for get_sync_data_ext"))
             network_cache_dict = {}
+            if full_sync:
+                # network_cache_dict is a dict that will be used when adding
+                # the port info to the hosting. Givent a network_id, it gets
+                # the segment_id (vlan). This dict built now to save time in
+                # full sync scenario in large deployments:
+                #   - Get_networks returns a list in this format:
+                # [{'id': u'id_value', 'provider:segmentation_id': vlan#},...]
+                #   - gets converted into a network_cache_dict of this format:
+                # {u'id_value':vlan_num, ...}
+                networks = self._core_plugin.get_networks(context,
+                                fields=["id", pr_net.SEGMENTATION_ID])
+                for n in networks:
+                    network_cache_dict[n['id']] = n.get(pr_net.SEGMENTATION_ID)
+
             for router in sync_data:
                 loop_start_time = time.time()
                 self._add_type_and_hosting_device_info(context, router)
@@ -704,7 +738,7 @@ class PhysicalL3RouterApplianceDBMixin(
                     (add_type_time - loop_start_time,
                     add_host_port_time - loop_start_time))
 
-            LOG.debug("Total time all loops: %s" % (time.time() - start_time))
+            LOG.info(_("Total time for loop: %s") % (time.time() - start_time))
 
             return sync_data
 
@@ -803,21 +837,15 @@ class PhysicalL3RouterApplianceDBMixin(
 
     def _get_hosting_info_for_port_no_vm(self, context, router_id, port,
                                          hosting_pdata, network_cache_dict):
-        LOG.info(_("Get host info, network_id: %s") % port['network_id'])
-        if port['network_id'] not in network_cache_dict:
-            network = self._core_plugin.get_networks(context,
-                    {'id': [port['network_id']]}, [pr_net.SEGMENTATION_ID])
-
-            LOG.info(_("CACHE MISS, network: %s") % (network))
-            if len(network) < 1:
-                allocated_vlan = None
-            else:
-                network_cache_dict[port['network_id']] = network[0]
-                allocated_vlan = network[0].get(pr_net.SEGMENTATION_ID)
+        net_id = port['network_id']
+        LOG.debug(_("Get host info, network_id: %s") % net_id)
+        if net_id in network_cache_dict:
+            LOG.debug(_("CACHE HIT, net_id: %s") % (net_id))
         else:
-            LOG.info(_("CACHE HIT"))
-            network = network_cache_dict[port['network_id']]
-            allocated_vlan = network.get(pr_net.SEGMENTATION_ID)
+            network = self._core_plugin.get_network(context, net_id)
+            LOG.debug(_("CACHE MISS, network: %s") % (network))
+            network_cache_dict[net_id] = network[pr_net.SEGMENTATION_ID]
+        allocated_vlan = network_cache_dict[net_id]
 
         if hosting_pdata.get('mac') is None:
             hosting_pdata['mac'] = "mac_placeholder"
@@ -836,13 +864,17 @@ class PhysicalL3RouterApplianceDBMixin(
         if not agent.admin_state_up:
             return []
 
-        if router_ids is None:
+        if router_ids:
+            full_sync = False
+        else:
+            full_sync = True
             router_ids = []
             routers = self.get_routers(context)
             for router in routers:
                 router_ids.append(router['id'])
 
-        LOG.info(_("active sync router_ids: %s") % (router_ids))
+        LOG.info(_("%(s)s sync with router_ids: %(r)s") %
+                 {'s': "Full" if full_sync else "Partial", 'r': router_ids})
 
-        return self.get_sync_data_ext(context, router_ids=router_ids,
-                                      active=True)
+        return self.get_sync_data_ext(context, full_sync=full_sync,
+                                      router_ids=router_ids, active=True)

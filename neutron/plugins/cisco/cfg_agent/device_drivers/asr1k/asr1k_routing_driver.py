@@ -459,12 +459,11 @@ class ASR1kRoutingDriver(csr1kv_driver.CSR1kvRoutingDriver):
                 self._remove_dyn_nat_rule(acl, ext_intf_name, vrf_name)
 
     def _csr_add_default_route(self, ri, gw_ip, gw_port):
-        router_id = self._get_short_router_id_from_port(gw_port)
-        if self._fullsync and router_id in self._existing_cfg_dict['routes']:
+        vrf_name = self._csr_get_vrf_name(ri)
+        if self._fullsync and vrf_name in self._existing_cfg_dict['routes']:
             LOG.info(_("Default route already exists, skipping"))
             return
 
-        vrf_name = self._csr_get_vrf_name(ri)
         confstr = asr_snippets.SET_DEFAULT_ROUTE_WITH_INTF % (vrf_name,
                                                               gw_ip)
         self._edit_running_config(confstr,
@@ -756,6 +755,9 @@ class ASR1kRoutingDriver(csr1kv_driver.CSR1kvRoutingDriver):
         self._edit_running_config(confstr, action)
 
     def _create_vrf(self, vrf_name):
+        if self._fullsync and vrf_name in self._existing_cfg_dict['vrfs']:
+            LOG.info(_("VRF definition already exists, skipping"))
+            return
         try:
             confstr = asr_snippets.CREATE_VRF_DEFN % vrf_name
             self._edit_running_config(confstr, "CREATE_VRF_DEFN")

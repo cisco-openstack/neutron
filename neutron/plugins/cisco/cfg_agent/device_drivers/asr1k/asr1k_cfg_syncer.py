@@ -31,10 +31,11 @@ EXT_HSRP_GRP_OFFSET = 1064
 
 DEP_ID_REGEX = "(\w{3,3})"
 NROUTER_REGEX = "nrouter-(\w{6,6})-" + DEP_ID_REGEX
-#NROUTER_REGEX = "nrouter-(\w{6,6})"
 
 VRF_REGEX = "ip vrf " + NROUTER_REGEX
 VRF_REGEX_NEW = "vrf definition " + NROUTER_REGEX
+VRF_ADDR_FAMILY_V4 = "address-family ipv4"
+VRF_ADDR_FAMILY_V6 = "address-family ipv6"
 
 INTF_REGEX_BASE = "interface %s\.(\d+)"
 INTF_DESC_REGEX = "\s*description OPENSTACK_NEUTRON-" + DEP_ID_REGEX + "_INTF"
@@ -53,7 +54,7 @@ INTF_V4_ADDR_REGEX = "\s*ip address " + IP_AND_MASK_REGEX
 HSRP_V4_VIP_REGEX = "\s*standby (\d+) ip " + IP_REGEX
 
 SNAT_REGEX = ("ip nat inside source static " + IP_AND_MASK_REGEX + " vrf " +
-        NROUTER_REGEX + "redundancy neutron-hsrp-(\d+)-(\d+)")
+        NROUTER_REGEX + " redundancy neutron-hsrp-(\d+)-(\d+)")
 
 NAT_POOL_REGEX = ("ip nat pool " + NROUTER_REGEX + "_nat_pool " +
         IP_AND_MASK_REGEX + " netmask " + IP_REGEX)
@@ -68,7 +69,7 @@ NAT_POOL_OVERLOAD_REGEX = ("ip nat inside source list neutron_acl_" +
 ACL_REGEX = "ip access-list standard neutron_acl_" + DEP_ID_REGEX + "_(\d+)"
 ACL_CHILD_REGEX = "\s*permit " + IP_AND_MASK_REGEX
 
-ZERO_ROUTE_REGEX = " 0\.0\.0\.0 0\.0\.0\.0 %s\.(\d+) "
+ZERO_ROUTE_REGEX = " 0\.0\.0\.0 0\.0\.0\.0(?: %s\.(\d+))? "
 DEFAULT_ROUTE_REGEX_BASE = ("ip route vrf " + NROUTER_REGEX +
         ZERO_ROUTE_REGEX + IP_REGEX)
 
@@ -107,6 +108,7 @@ class ConfigSyncer(object):
         self.existing_cfg_dict['acls'] = {}
         self.existing_cfg_dict['routes'] = {}
         self.existing_cfg_dict['pools'] = {}
+        self.existing_cfg_dict['vrfs'] = {}
         self.init_regex(target_intf_name)
 
     def init_regex(self, target_intf_name):
@@ -134,13 +136,13 @@ class ConfigSyncer(object):
 
             # initialize interface dict keyed by segment_id
             interfaces = []
-            if '_interfaces' in router.keys():
+            if '_interfaces' in router:
                 interfaces += router['_interfaces']
 
-            if 'gw_port' in router.keys():
+            if 'gw_port' in router:
                 interfaces += [router['gw_port']]
 
-            if '_ha_gw_interfaces' in router.keys():
+            if '_ha_gw_interfaces' in router:
                 interfaces += router['_ha_gw_interfaces']
 
             # Orgnize interfaces, indexed by segment_id
@@ -155,10 +157,10 @@ class ConfigSyncer(object):
             # Mark which segments have NAT enabled
             # i.e., the segment is present on at least 1 router with
             # both external and internal networks present
-            if 'gw_port' in router.keys():
+            if 'gw_port' in router:
                 gw_port = router['gw_port']
                 gw_segment_id = gw_port['hosting_info']['segmentation_id']
-                if '_interfaces' in router.keys():
+                if '_interfaces' in router:
                     interfaces = router['_interfaces']
                     for intf in interfaces:
                         if (intf['device_owner'] ==
@@ -200,7 +202,7 @@ class ConfigSyncer(object):
                 dev_owner = intf['device_owner']
                 dev_id = intf['device_id'][0:6]
                 ip_addr = intf['fixed_ips'][0]['ip_address']
-                if 'phy_router_db' in intf.keys():
+                if 'phy_router_db' in intf:
                     phy_router_name = intf['phy_router_db'].get('name')
                     LOG.debug("    INTF: %s, %s, %s, %s" %
                              (ip_addr, dev_id, dev_owner, phy_router_name))
@@ -252,12 +254,14 @@ class ConfigSyncer(object):
         invalid_dep_id_list = []
 
         for parsed_obj in parsed_cfg.find_objects(VRF_REGEX_NEW):
-            LOG.info(_("VRF object: %s") % (parsed_obj))
+            LOG.info(_("VRF object: %s") % (str(parsed_obj)))
             match_obj = re.match(VRF_REGEX_NEW, parsed_obj.text)
             router_id, dep_id = match_obj.group(1, 2)
             LOG.debug("    First 6 digits of router ID: %s, dep_id: %s\n" %
                      (router_id, dep_id))
-            if dep_id == self.dep_id:
+            if (dep_id == self.dep_id and
+                parsed_obj.re_search_children(VRF_ADDR_FAMILY_V4) and
+                parsed_obj.re_search_children(VRF_ADDR_FAMILY_V6)):
                 rconf_ids.append(router_id)
             elif dep_id not in self.other_dep_ids:
                 invalid_dep_id_list.append((router_id, dep_id))
@@ -289,10 +293,9 @@ class ConfigSyncer(object):
             confstr = asr_snippets.REMOVE_VRF_DEFN % vrf_name
             conn.edit_config(target='running', config=confstr)
 
-        for router_id in add_set:
+        for router_id in source_set.intersection(dest_set):
             vrf_name = "nrouter-%s-%s" % (router_id, self.dep_id)
-            confstr = asr_snippets.CREATE_VRF_DEFN % vrf_name
-            #rpc_obj = conn.edit_config(target='running', config=confstr)
+            self.existing_cfg_dict['vrfs'][vrf_name] = True
 
     def get_single_cfg(self, cfg_line):
         if len(cfg_line) != 1:
@@ -370,7 +373,6 @@ class ConfigSyncer(object):
             match_obj = re.match(route_regex, route.text)
             (router_id, dep_id, segment_id,
              next_hop) = match_obj.group(1, 2, 3, 4)
-            segment_id = int(segment_id)
             LOG.debug("    router_id: %s, segment_id: %s, next_hop: %s" %
                      (router_id, segment_id, next_hop))
 
@@ -397,12 +399,13 @@ class ConfigSyncer(object):
                 continue
 
             gw_port = router['gw_port']
-            gw_segment_id = gw_port['hosting_info']['segmentation_id']
-            if segment_id != gw_segment_id:
-                LOG.info(_("route segment_id does not match router's gw "
-                         "segment_id, deleting"))
-                delete_route_list.append(route.text)
-                continue
+            if "global" not in route.text:
+                gw_segment_id = gw_port['hosting_info']['segmentation_id']
+                if segment_id != gw_segment_id:
+                    LOG.info(_("route segment_id does not match router's gw "
+                             "segment_id, deleting"))
+                    delete_route_list.append(route.text)
+                    continue
 
             # Check that nexthop matches gw_ip of external network
             gw_ip = gw_port['subnet']['gateway_ip']

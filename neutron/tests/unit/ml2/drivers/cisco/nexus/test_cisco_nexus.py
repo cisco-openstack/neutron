@@ -440,8 +440,6 @@ class TestCiscoNexusDevice(testlib_api.SqlTestCase):
 
         self._create_port(
             TestCiscoNexusDevice.test_configs['test_config3'])
-        # verify only the first config was applied
-        self._verify_results(duplicate_add_port_driver_result)
 
         # Verify there are 2 port configs
         bindings = nexus_db_v2.get_nexusvlan_binding(VLAN_ID_1,

@@ -94,14 +94,11 @@ class TestCiscoNexusL3Plugin(test_db_plugin.NeutronDbPluginV2TestCase,
         self.plugin.add_router_interface(self.context, ROUTER,
                                          self.interface_info)
 
-        self.assertTrue(self._check_xml_keywords(['name', 'q-100'],
+        self.assertTrue(self._check_xml_keywords(
+            ['vlan-id-create-delete', '100'],
             driver._edit_config.mock_calls[0][2]['config']))
-        self.assertTrue(self._check_xml_keywords(['state', 'active'],
-            driver._edit_config.mock_calls[1][2]['config']))
-        self.assertTrue(self._check_xml_keywords(['no', 'shutdown'],
-            driver._edit_config.mock_calls[2][2]['config']))
         self.assertTrue(self._check_xml_keywords(['interface', 'vlan'],
-            driver._edit_config.mock_calls[3][2]['config']))
+            driver._edit_config.mock_calls[1][2]['config']))
 
         self.plugin.remove_router_interface(self.context, ROUTER,
                                             self.interface_info)
@@ -122,9 +119,9 @@ class TestCiscoNexusL3Plugin(test_db_plugin.NeutronDbPluginV2TestCase,
                                             self.interface_info)
 
         self.assertTrue(self._check_xml_keywords(['no', 'interface'],
-            driver._edit_config.mock_calls[4][2]['config']))
+            driver._edit_config.mock_calls[-2][2]['config']))
         self.assertTrue(self._check_xml_keywords(['no', 'vlan'],
-            driver._edit_config.mock_calls[5][2]['config']))
+            driver._edit_config.mock_calls[-1][2]['config']))
 
     def test_add_router_interface_excep_noportid(self):
         self.interface_info['port_id'] = 'Invalid'

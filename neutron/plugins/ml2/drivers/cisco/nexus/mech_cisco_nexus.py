@@ -195,18 +195,29 @@ class CiscoNexusCfgMonitor(object):
                         switch_ip, const.SWITCH_INACTIVE)
             else:
                 if state == const.SWITCH_RESTORE_S2:
-                    self._mdriver.configure_next_batch_of_vlans(switch_ip)
+                    try:
+                        self._mdriver.configure_next_batch_of_vlans(switch_ip)
+                    except Exception as e:
+                        LOG.error(_LE("Unexpected exception while replaying "
+                                  "entries for switch %(switch_ip)s, "
+                                  "Reason:%(reason)s "),
+                                  {'switch_ip': switch_ip, 'reason': e})
+                        self._mdriver.register_switch_as_inactive(
+                            switch_ip, 'replay next_vlan_batch')
                     continue
+
                 if state == const.SWITCH_INACTIVE:
                     self._configure_nexus_type(switch_ip, nexus_type)
                     LOG.info(_LI("Re-established connection to switch "
                         "ip %(switch_ip)s"),
                         {'switch_ip': switch_ip})
+
                     self._mdriver.set_switch_ip_and_active_state(
                         switch_ip, const.SWITCH_RESTORE_S1)
                     self._driver.keep_ssh_caching()
                     self.replay_config(switch_ip)
                     self._driver.init_ssh_caching()
+
                     # If replay failed, it stops trying to configure db entries
                     # and sets switch state to inactive so this caller knows
                     # it failed.  If it did fail, we increment the
@@ -327,8 +338,8 @@ class CiscoNexusMechanismDriver(api.MechanismDriver):
         else:
             return []
 
-    def _save_switch_vxlan_range(self, switch_ip, vlan_range):
-        self._switch_state[switch_ip, '_vxlan_range'] = vlan_range
+    def _save_switch_vxlan_range(self, switch_ip, vxlan_range):
+        self._switch_state[switch_ip, '_vxlan_range'] = vxlan_range
 
     def _get_switch_vxlan_range(self, switch_ip):
         if (switch_ip, '_vxlan_range') in self._switch_state:
@@ -826,13 +837,22 @@ class CiscoNexusMechanismDriver(api.MechanismDriver):
                 self.driver.set_all_vlan_states(
                     switch_ip, next_range)
             except Exception:
-                LOG.error(_LE("Error encountered restoring vlans "
-                    "%(range)s for switch %(switch_ip)s"),
-                    {'range': next_range, 'switch_ip': switch_ip})
+                with excutils.save_and_reraise_exception():
+                    LOG.error(_LE("Error encountered restoring vlans "
+                        "for switch %(switch_ip)s"),
+                        {'switch_ip': switch_ip})
+                    self._save_switch_vlan_range(switch_ip, [])
 
         vxlan_range = self._get_switch_vxlan_range(switch_ip)
         if vxlan_range:
-            self._restore_vxlan_entries(switch_ip, vxlan_range)
+            try:
+                self._restore_vxlan_entries(switch_ip, vxlan_range)
+            except Exception:
+                with excutils.save_and_reraise_exception():
+                    LOG.error(_LE("Error encountered restoring vxlans "
+                        "for switch %(switch_ip)s"),
+                        {'switch_ip': switch_ip})
+                    self._save_switch_vxlan_range(switch_ip, [])
 
         # if no more vlans to restore, we're done. go active.
         if (not self._get_switch_vlan_range(switch_ip) and
@@ -843,9 +863,9 @@ class CiscoNexusMechanismDriver(api.MechanismDriver):
                 "ip %(switch_ip)s is complete"),
                 {'switch_ip': switch_ip})
         else:
-            LOG.debug(("Restored batch of VLANS $(range)s on "
+            LOG.debug(("Restored batch of VLANS on "
                 "Nexus switch ip %(switch_ip)s"),
-                {'range': next_range, 'switch_ip': switch_ip})
+                {'switch_ip': switch_ip})
 
     def configure_switch_entries(self, switch_ip, port_bindings):
         """Create a nexus switch entry in Nexus.
